@@ -10,7 +10,7 @@ import threading
 import time
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Flask setup for UptimeRobot
@@ -22,13 +22,23 @@ try:
 except ImportError:
     logger.info("Flask not installed. Web server disabled. Install with: pip install flask")
 
-# PUT YOUR BOT TOKEN HERE
-BOT_TOKEN = os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+# Bot token from environment variables
+BOT_TOKEN = None
+for token_var in ['DISCORD_TOKEN', 'BOT_TOKEN', 'TOKEN']:
+    token = os.getenv(token_var)
+    if token and token != "YOUR_BOT_TOKEN_HERE":
+        BOT_TOKEN = token
+        logger.info(f"Bot token found from {token_var}")
+        break
+
+if not BOT_TOKEN:
+    logger.error("No valid bot token found in environment variables!")
+    logger.error("Please set one of: DISCORD_TOKEN, BOT_TOKEN, or TOKEN")
 
 # Configuration
 ADMIN_ROLE_ID = 1410911675351306250
 LOG_CHANNEL_ID = 1411664747958501429
-PORT = int(os.getenv("PORT", 3000))  # Replit typically uses port 3000
+PORT = int(os.getenv("PORT", 3000))
 
 # Bot setup with timeout configurations
 intents = discord.Intents.default()
@@ -50,27 +60,60 @@ user_data = {}
 if FLASK_AVAILABLE:
     app = Flask(__name__)
     flask_started = False
-
+    
     @app.route('/')
     def home():
         return f'''
-        <h1>Discord Bot Status</h1>
-        <p>Bot Status: {'Online' if bot.is_ready() else 'Offline'}</p>
-        <p>Bot User: {bot.user}</p>
-        <p>Guilds: {len(bot.guilds) if bot.is_ready() else 'N/A'}</p>
-        <p>Users in Database: {len(user_data)}</p>
-        <p>Uptime: Bot is running</p>
-        <p>Server Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Discord Bot Status</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; margin: 40px; background-color: #f5f5f5; }}
+                .container {{ background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+                .status-online {{ color: #28a745; }}
+                .status-offline {{ color: #dc3545; }}
+                h1 {{ color: #343a40; }}
+                p {{ margin: 10px 0; font-size: 16px; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>Discord Bot Status</h1>
+                <p><strong>Bot Status:</strong> <span class="{'status-online' if bot.is_ready() else 'status-offline'}">{['Online', 'Offline'][not bot.is_ready()]}</span></p>
+                <p><strong>Bot User:</strong> {bot.user if bot.user else 'Not connected'}</p>
+                <p><strong>Guilds:</strong> {len(bot.guilds) if bot.is_ready() else 'N/A'}</p>
+                <p><strong>Users in Database:</strong> {len(user_data)}</p>
+                <p><strong>Uptime:</strong> Bot is running</p>
+                <p><strong>Server Time:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
+                <p><strong>Platform:</strong> Railway</p>
+            </div>
+        </body>
+        </html>
         '''
-
+    
     @app.route('/health')
     def health():
-        return {'status': 'healthy', 'bot_ready': bot.is_ready(), 'timestamp': datetime.now().isoformat()}, 200
-
+        return {
+            'status': 'healthy', 
+            'bot_ready': bot.is_ready(), 
+            'timestamp': datetime.now().isoformat(),
+            'guilds': len(bot.guilds) if bot.is_ready() else 0,
+            'users_in_db': len(user_data)
+        }, 200
+    
     @app.route('/ping')
     def ping():
         return 'pong'
-
+    
+    @app.route('/status')
+    def status():
+        return {
+            'online': bot.is_ready(),
+            'user': str(bot.user) if bot.user else None,
+            'guilds': len(bot.guilds) if bot.is_ready() else 0
+        }
+    
     def start_flask_server():
         global flask_started
         if flask_started:
@@ -110,8 +153,9 @@ def load_data():
 async def on_ready():
     logger.info(f'Bot online: {bot.user} (ID: {bot.user.id})')
     logger.info(f'Connected to {len(bot.guilds)} guilds')
+    logger.info(f'Bot is ready and operational!')
     load_data()
-
+    
     # Add retry logic for command sync
     max_retries = 3
     for attempt in range(max_retries):
@@ -153,7 +197,7 @@ async def update_or_create_log_message(user_id, username, timestamp, set_by_admi
                 message.embeds[0].title == "🎮 Roblox Username Set" and
                 message.embeds[0].description and
                 f"<@{user_id}>" in message.embeds[0].description):
-
+                
                 existing_message = message
                 break
 
@@ -165,7 +209,7 @@ async def update_or_create_log_message(user_id, username, timestamp, set_by_admi
         )
         embed.add_field(name="🔗 Roblox Username:", value=f"**{username}**", inline=False)
         embed.add_field(name="⏰ Set At:", value=f"<t:{timestamp}:R>", inline=False)
-
+        
         if set_by_admin and admin_user:
             embed.set_footer(text=f"Set by {admin_user.display_name} (Admin)")
 
@@ -176,7 +220,7 @@ async def update_or_create_log_message(user_id, username, timestamp, set_by_admi
         else:
             await asyncio.wait_for(channel.send(embed=embed), timeout=15.0)
             logger.info(f"Created new log message for user {user_id}")
-
+                
     except asyncio.TimeoutError:
         logger.error("Timeout while updating log message")
     except Exception as e:
@@ -304,7 +348,7 @@ async def manroblox_command(interaction: discord.Interaction, user: discord.Memb
 async def getroblox_command(interaction: discord.Interaction, user: Optional[discord.Member] = None):
     target_user = user or interaction.user
     user_id = str(target_user.id)
-
+    
     if user_id not in user_data:
         embed = discord.Embed(
             description=f"❌ No Roblox username found for {target_user.mention}",
@@ -312,10 +356,10 @@ async def getroblox_command(interaction: discord.Interaction, user: Optional[dis
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
         return
-
+    
     username = user_data[user_id]['username']
     set_time = user_data[user_id].get('last_used', 'Unknown')
-
+    
     try:
         if set_time != 'Unknown':
             set_datetime = datetime.fromisoformat(set_time)
@@ -325,7 +369,7 @@ async def getroblox_command(interaction: discord.Interaction, user: Optional[dis
             time_display = "Unknown"
     except ValueError:
         time_display = "Unknown"
-
+    
     embed = discord.Embed(
         title="🎮 Roblox Username",
         description=f"**User:** {target_user.mention}\n**Username:** {username}\n**Set:** {time_display}",
@@ -346,7 +390,10 @@ async def on_app_command_error(interaction: discord.Interaction, error):
             description="❌ An error occurred while processing this command",
             color=0xff0000
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        try:
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        except:
+            pass
 
 @bot.event
 async def on_error(event, *args, **kwargs):
@@ -357,7 +404,7 @@ async def run_bot_with_reconnect():
     """Run bot with automatic reconnection logic"""
     max_retries = 5
     retry_delay = 30
-
+    
     for attempt in range(max_retries):
         try:
             logger.info(f"Starting bot (attempt {attempt + 1}/{max_retries})...")
@@ -376,27 +423,27 @@ async def run_bot_with_reconnect():
             raise
 
 def main():
-    if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
-        print("ERROR: Please add your bot token!")
-        print("You can either:")
-        print("1. Set DISCORD_TOKEN environment variable in Replit Secrets")
-        print("2. Replace 'YOUR_BOT_TOKEN_HERE' in the code")
-        input("Press Enter to exit...")
+    if not BOT_TOKEN:
+        logger.error("ERROR: No bot token found!")
+        logger.error("Please set DISCORD_TOKEN environment variable in Railway")
         return
 
+    logger.info("Starting Discord Roblox Bot...")
+    logger.info(f"Port: {PORT}")
+    
     if not FLASK_AVAILABLE:
-        print("WARNING: Flask not installed. Web server for UptimeRobot will not work.")
-        print("Install Flask with: pip install flask")
+        logger.warning("Flask not available. Web server disabled.")
+        logger.warning("Install Flask with: pip install flask")
     else:
         # Start Flask server in a separate thread
         logger.info("Starting Flask web server...")
         flask_thread = threading.Thread(target=start_flask_server, daemon=False)
         flask_thread.start()
-
+        
         # Give the server a moment to start
         time.sleep(3)
         logger.info(f"Web server should be available at http://localhost:{PORT}")
-
+    
     try:
         # Start the bot
         asyncio.run(run_bot_with_reconnect())
@@ -404,7 +451,6 @@ def main():
         logger.info("Bot shutdown requested by user")
     except Exception as e:
         logger.error(f"Bot startup error: {e}")
-        input("Press Enter to exit...")
 
 if __name__ == "__main__":
     main()
