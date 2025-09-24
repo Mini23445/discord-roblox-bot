@@ -1,2 +1,2 @@
-discord.py
-flask
+discord.py>=2.3.0
+aiofiles==23.2.1
