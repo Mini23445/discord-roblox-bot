@@ -1276,19 +1276,24 @@ class PurchaseConfirmView(discord.ui.View):
         embed = discord.Embed(title="❌ Purchase Cancelled", description="Your purchase has been cancelled.", color=0xff4444)
         await interaction.response.edit_message(embed=embed, view=None)
 
-# Shop view with buttons
+# Shop view with buttons - FIXED
 class ShopView(discord.ui.View):
     def __init__(self, user_balance):
         super().__init__(timeout=300)
         self.user_balance = user_balance
         
-        for i, item in enumerate(shop_data[:25]):
+        for i, item in enumerate(shop_data[:25]):  # Maximum 25 items
             affordable = user_balance >= item['price']
+            
+            # Calculate row (0-4) and ensure it's within valid range
+            row = i // 5  # This gives us rows 0, 1, 2, 3, 4 for items 0-24
+            
             button = discord.ui.Button(
                 label=f"{item['name']} - {item['price']:,}🪙",
                 style=discord.ButtonStyle.green if affordable else discord.ButtonStyle.grey,
                 disabled=not affordable,
-                custom_id=f"buy_{i}"
+                custom_id=f"buy_{i}",
+                row=row  # Explicitly set the row
             )
             button.callback = self.create_buy_callback(i)
             self.add_item(button)
