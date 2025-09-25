@@ -1020,13 +1020,12 @@ class MinesButton(discord.ui.Button):
         self.is_mine = is_mine
         
         if revealed:
-    if is_mine:
-        super().__init__(style=discord.ButtonStyle.danger, label="💣", disabled=True, row=min(position // 5, 4))
-    else:
-        super().__init__(style=discord.ButtonStyle.success, label="💎", disabled=True, row=min(position // 5, 4))
-else:
-    row = min(position // 5, 4)  # This ensures row never exceeds 4
-    super().__init__(style=discord.ButtonStyle.secondary, label="⬜", row=row)
+            if is_mine:
+                super().__init__(style=discord.ButtonStyle.danger, label="💣", disabled=True, row=position // 5)
+            else:
+                super().__init__(style=discord.ButtonStyle.success, label="💎", disabled=True, row=position // 5)
+        else:
+             super().__init__(style=discord.ButtonStyle.secondary, label="⬜", row=min(position // 5, 4))
     
     async def callback(self, interaction: discord.Interaction):
         # Get the game data
@@ -1116,14 +1115,14 @@ class MinesView(discord.ui.View):
         # Create the initial board
         for i in range(25):
             self.add_item(MinesButton(i))
-
-    @discord.ui.button(label="💰 Cash Out", style=discord.ButtonStyle.green, row=5)
+    
+        @discord.ui.button(label="💰 Cash Out", style=discord.ButtonStyle.green, row=5)
     async def cash_out(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Get the game data
         if self.game_id not in active_mines_games:
             await interaction.response.send_message("❌ This game has expired!", ephemeral=True)
             return
-    
+        
         game = active_mines_games[self.game_id]
         
         # Calculate winnings
