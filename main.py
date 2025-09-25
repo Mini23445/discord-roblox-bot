@@ -24,9 +24,9 @@ intents.invites = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # Configuration
-ADMIN_ROLE_ID = 1405525451807522847
-LOG_CHANNEL_ID = 1405523454924685353
-PURCHASE_LOG_CHANNEL_ID = 1405523454924685353
+ADMIN_ROLE_ID = 1410911675351306250
+LOG_CHANNEL_ID = 1413818486404415590
+PURCHASE_LOG_CHANNEL_ID = 1413885597826813972
 
 # Coinflip configuration
 coinflip_config = {
@@ -617,60 +617,70 @@ async def on_member_join(member):
             print(f"❌ {member} joined but account is too new ({account_age.days} days)")
             return
         
-        # Try to get the invite used
-        invites_before = await member.guild.invites()
-        await asyncio.sleep(5)  # Wait a bit for Discord to update
-        invites_after = await member.guild.invites()
+        # Get all invites for the guild
+        try:
+            invites = await member.guild.invites()
+        except:
+            print(f"⚠️ Could not get invites for guild {member.guild.name}")
+            return
         
+        # Find the invite with the highest uses (most likely the one used)
         used_invite = None
-        for invite in invites_before:
-            after_invite = next((inv for inv in invites_after if inv.code == invite.code), None)
-            if after_invite and after_invite.uses > invite.uses:
-                used_invite = after_invite
-                break
+        max_uses = 0
         
-        if used_invite and used_invite.inviter and not used_invite.inviter.bot:
-            inviter_id = str(used_invite.inviter.id)
-            invited_id = str(member.id)
+        for invite in invites:
+            if invite.inviter and not invite.inviter.bot and invite.uses > max_uses:
+                used_invite = invite
+                max_uses = invite.uses
+        
+        if not used_invite or used_invite.inviter.id == member.id:
+            return
+        
+        inviter_id = str(used_invite.inviter.id)
+        invited_id = str(member.id)
+        
+        # Initialize inviter data if not exists
+        if inviter_id not in invite_data:
+            invite_data[inviter_id] = {
+                'invited_users': [],
+                'total_invites': 0,
+                'tokens_earned': 0
+            }
+        
+        # Check if this user was already tracked
+        if invited_id in invite_data[inviter_id]['invited_users']:
+            return
+        
+        # Reward inviter with 300 tokens
+        update_balance(int(inviter_id), 300)
+        invite_data[inviter_id]['invited_users'].append(invited_id)
+        invite_data[inviter_id]['total_invites'] += 1
+        invite_data[inviter_id]['tokens_earned'] += 300
+        
+        await save_data()
+        
+        # Send DM to inviter
+        try:
+            embed = discord.Embed(
+                title="🎉 Invite Reward!",
+                description=f"You invited {member.mention} and got 300 tokens!",
+                color=0x00ff00,
+                timestamp=datetime.now()
+            )
+            embed.add_field(name="Invited User", value=member.display_name, inline=True)
+            embed.add_field(name="Reward", value="300 🪙", inline=True)
+            embed.add_field(name="Total Invites", value=invite_data[inviter_id]['total_invites'], inline=True)
+            embed.set_footer(text="IM's Universe")
             
-            # Initialize inviter data if not exists
-            if inviter_id not in invite_data:
-                invite_data[inviter_id] = {
-                    'invited_users': [],
-                    'total_invites': 0,
-                    'tokens_earned': 0
-                }
-            
-            # Check if this user was already tracked
-            if invited_id not in invite_data[inviter_id]['invited_users']:
-                # Reward inviter with 300 tokens
-                update_balance(int(inviter_id), 300)
-                invite_data[inviter_id]['invited_users'].append(invited_id)
-                invite_data[inviter_id]['total_invites'] += 1
-                invite_data[inviter_id]['tokens_earned'] += 300
-                
-                await save_data()
-                
-                # Send DM to inviter
-                try:
-                    embed = discord.Embed(
-                        title="🎉 Invite Reward!",
-                        description=f"You invited {member.mention} and got 300 tokens!",
-                        color=0x00ff00,
-                        timestamp=datetime.now()
-                    )
-                    embed.add_field(name="Invited User", value=member.display_name, inline=True)
-                    embed.add_field(name="Reward", value="300 🪙", inline=True)
-                    embed.add_field(name="Total Invites", value=invite_data[inviter_id]['total_invites'], inline=True)
-                    embed.set_footer(text="IM's Universe")
-                    
-                    await used_invite.inviter.send(embed=embed)
-                except:
-                    print(f"⚠️ Could not DM {used_invite.inviter} about invite reward")
-                
-                print(f"✅ {used_invite.inviter} rewarded 300 tokens for inviting {member}")
+            await used_invite.inviter.send(embed=embed)
+        except:
+            print(f"⚠️ Could not DM {used_invite.inviter} about invite reward")
+        
+        print(f"✅ {used_invite.inviter} rewarded 300 tokens for inviting {member}")
+        
     except Exception as e:
         print(f"⚠️ Error processing member join: {e}")
+
 
 # Invite Panel View
 class InvitePanelView(discord.ui.View):
@@ -685,9 +695,17 @@ class InvitePanelView(discord.ui.View):
             return
         
         try:
-            # Create an invite for the server
+            # Create an invite for the server with longer duration
             guild = interaction.guild
-            invite = await guild.text_channels[0].create_invite(max_uses=1, unique=True, max_age=604800)  # 7 days
+            invite_channel = guild.text_channels[0]  # Use first text channel
+            
+            # Create invite with reasonable settings
+            invite = await invite_channel.create_invite(
+                max_uses=10, 
+                unique=True, 
+                max_age=604800,  # 7 days
+                reason=f"Invite generated by {interaction.user} for token rewards"
+            )
             
             embed = discord.Embed(
                 title="🔗 Your Personal Invite Link",
@@ -697,11 +715,15 @@ class InvitePanelView(discord.ui.View):
             embed.add_field(name="Invite Link", value=invite.url, inline=False)
             embed.add_field(name="Reward", value="300 🪙 per valid invite", inline=True)
             embed.add_field(name="Requirements", value="Account must be 30+ days old", inline=True)
+            embed.add_field(name="Expires", value="7 days", inline=True)
+            embed.add_field(name="Max Uses", value="10 uses", inline=True)
             embed.set_footer(text="You'll receive a DM when someone joins using your link")
             
             await interaction.response.send_message(embed=embed, ephemeral=True)
         except Exception as e:
-            await interaction.response.send_message("❌ Could not generate invite link. Please try again.", ephemeral=True)
+            print(f"⚠️ Error generating invite: {e}")
+            await interaction.response.send_message("❌ Could not generate invite link. Please try again or ask an admin.", ephemeral=True)
+
     
     @discord.ui.button(label="📊 View My Invites", style=discord.ButtonStyle.blurple, emoji="📊")
     async def view_invites(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -990,12 +1012,12 @@ async def coinflip(interaction: discord.Interaction, amount: str, choice: str): 
     await interaction.response.send_message(embed=embed)
 
 # Mines game button class
+# Mines game button class
 class MinesButton(discord.ui.Button):
-    def __init__(self, position, revealed=False, is_mine=False, is_revealed_mine=False):
+    def __init__(self, position, revealed=False, is_mine=False):
         self.position = position
         self.revealed = revealed
         self.is_mine = is_mine
-        self.is_revealed_mine = is_revealed_mine
         
         if revealed:
             if is_mine:
@@ -1014,8 +1036,8 @@ class MinesButton(discord.ui.Button):
         
         game = active_mines_games[game_id]
         
-        # Check if this position is already revealed
-        if self.position in game['revealed']:
+        # Check if game is over or position already revealed
+        if game.get('game_over') or self.position in game['revealed']:
             await interaction.response.defer()
             return
         
@@ -1025,19 +1047,20 @@ class MinesButton(discord.ui.Button):
             game['revealed'].append(self.position)
             game['game_over'] = True
             
-            # Update the board
-            for i, button in enumerate(self.view.children):
-                if isinstance(button, MinesButton) and i in game['mines']:
-                    button.revealed = True
-                    button.is_mine = True
-                    button.style = discord.ButtonStyle.danger
-                    button.label = "💣"
-                    button.disabled = True
-                elif isinstance(button, MinesButton) and i in game['revealed']:
-                    button.revealed = True
-                    button.style = discord.ButtonStyle.success
-                    button.label = "💎"
-                    button.disabled = True
+            # Update all buttons
+            for child in self.view.children:
+                if isinstance(child, MinesButton):
+                    if child.position in game['mines']:
+                        child.revealed = True
+                        child.is_mine = True
+                        child.style = discord.ButtonStyle.danger
+                        child.label = "💣"
+                        child.disabled = True
+                    elif child.position in game['revealed']:
+                        child.revealed = True
+                        child.style = discord.ButtonStyle.success
+                        child.label = "💎"
+                        child.disabled = True
             
             # Update message with loss
             embed = discord.Embed(
@@ -1046,8 +1069,8 @@ class MinesButton(discord.ui.Button):
                 color=0xff4444
             )
             embed.add_field(name="Bet Amount", value=f"{game['bet']:,} 🪙", inline=True)
-            embed.add_field(name="Safe Spots Found", value=f"{len(game['revealed'])}", inline=True)
-            embed.add_field(name="Multiplier", value=f"{MINES_MULTIPLIERS.get(len(game['revealed']), 1.0):.2f}x", inline=True)
+            embed.add_field(name="Safe Spots Found", value=f"{len(game['revealed']) - 1}", inline=True)  # -1 because last one was a mine
+            embed.add_field(name="Multiplier", value=f"{MINES_MULTIPLIERS.get(len(game['revealed']) - 1, 1.0):.2f}x", inline=True)
             embed.set_footer(text="Better luck next time!")
             
             await interaction.response.edit_message(embed=embed, view=self.view)
@@ -1093,7 +1116,7 @@ class MinesView(discord.ui.View):
         for i in range(25):
             self.add_item(MinesButton(i))
     
-    @discord.ui.button(label="💰 Cash Out", style=discord.ButtonStyle.green, row=5)
+        @discord.ui.button(label="💰 Cash Out", style=discord.ButtonStyle.green, row=5)
     async def cash_out(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Get the game data
         if self.game_id not in active_mines_games:
@@ -1110,10 +1133,10 @@ class MinesView(discord.ui.View):
         update_balance(interaction.user.id, winnings)
         await save_data()
         
-        # Reveal all mines
-        for i, child in enumerate(self.children):
+        # Reveal all mines and disable all buttons
+        for child in self.view.children:
             if isinstance(child, MinesButton):
-                if i in game['mines'] and not child.revealed:
+                if child.position in game['mines'] and not child.revealed:
                     child.revealed = True
                     child.is_mine = True
                     child.style = discord.ButtonStyle.danger
@@ -2466,72 +2489,84 @@ async def giveaway(interaction: discord.Interaction, amount: str, winners: int):
             for user_id, entries in giveaway['entries'].items():
                 all_entries.extend([user_id] * entries)
             
-            selected_winners = random.sample(all_entries, min(giveaway['winners'], len(set(all_entries))))
-            unique_winners = list(set(selected_winners))
-            
-            # Distribute prizes
-            winner_mentions = []
-            for winner_id in unique_winners:
+            # Ensure we don't try to select more winners than entries
+            winner_count = min(giveaway['winners'], len(set(all_entries)))
+            if winner_count > 0:
+                selected_winners = random.sample(all_entries, winner_count)
+                unique_winners = list(set(selected_winners))
+                
+                # Distribute prizes
+                winner_mentions = []
+                for winner_id in unique_winners:
+                    try:
+                        winner = await bot.fetch_user(int(winner_id))
+                        update_balance(winner.id, giveaway['prize_per_winner'])
+                        winner_mentions.append(winner.mention)
+                    except:
+                        continue
+                
+                # Create clean results embed
+                result_embed = discord.Embed(
+                    title="🎊 GIVEAWAY ENDED 🎊",
+                    description=f"**Hosted by:** {interaction.user.mention}",
+                    color=0x00ff00,
+                    timestamp=datetime.now()
+                )
+                
+                # Results summary
+                result_embed.add_field(name="🏆 Total Prize", value=f"**{giveaway['amount']:,}** 🪙", inline=True)
+                result_embed.add_field(name="👑 Winners", value=f"**{len(unique_winners)}**", inline=True)
+                result_embed.add_field(name="💰 Prize Each", value=f"**{giveaway['prize_per_winner']:,}** 🪙", inline=True)
+                
+                # Winners list
+                if winner_mentions:
+                    winners_text = "\n".join(winner_mentions)
+                    result_embed.add_field(
+                        name="🎉 Congratulations to the winners!", 
+                        value=winners_text, 
+                        inline=False
+                    )
+                
+                result_embed.set_footer(text="Tokens have been distributed to winners!")
+                
+                # Log the giveaway
+                await log_action(
+                    "GIVEAWAY",
+                    "🎉 Giveaway Completed",
+                    f"**{interaction.user.mention}** hosted a giveaway of **{giveaway['amount']:,} tokens**",
+                    color=0xFFD700,
+                    user=interaction.user,
+                    fields=[
+                        {"name": "Total Prize", "value": f"{giveaway['amount']:,} 🪙", "inline": True},
+                        {"name": "Winners", "value": f"{len(unique_winners)}", "inline": True},
+                        {"name": "Prize per Winner", "value": f"{giveaway['prize_per_winner']:,} 🪙", "inline": True},
+                        {"name": "Winners", "value": "\n".join(winner_mentions) if winner_mentions else "No winners", "inline": False}
+                    ]
+                )
+                
+                # Update the message
                 try:
-                    winner = await bot.fetch_user(int(winner_id))
-                    update_balance(winner.id, giveaway['prize_per_winner'])
-                    winner_mentions.append(winner.mention)
+                    await interaction.edit_original_response(embed=result_embed, view=None)
+                except Exception as e:
+                    print(f"⚠️ Error updating giveaway message: {e}")
+                    
+            else:
+                # No valid winners found
+                refund_embed = discord.Embed(
+                    title="🎉 GIVEAWAY ENDED",
+                    description="No valid winners could be selected. Tokens have been refunded.",
+                    color=0xff4444
+                )
+                
+                # Refund the creator
+                update_balance(interaction.user.id, giveaway['amount'])
+                giveaway_daily_totals[user_id][today] -= giveaway['amount']
+                
+                try:
+                    await interaction.edit_original_response(embed=refund_embed, view=None)
                 except:
-                    continue
-            
-            # Create results embed with improved UI
-            result_embed = discord.Embed(
-                title="🎊 GIVEAWAY ENDED 🎊",
-                description=f"Hosted by {interaction.user.mention}",
-                color=0x00ff00,
-                timestamp=datetime.now()
-            )
-            
-            result_embed.set_thumbnail(url="https://cdn.discordapp.com/emojis/1125272129399365632.webp?size=96&quality=lossless")
-            
-            # Results summary
-            result_embed.add_field(name="🏆 TOTAL PRIZE", value=f"**{giveaway['amount']:,}** 🪙", inline=True)
-            result_embed.add_field(name="👑 WINNERS", value=f"**{len(unique_winners)}/{giveaway['winners']}**", inline=True)
-            result_embed.add_field(name="💰 PRIZE PER WINNER", value=f"**{giveaway['prize_per_winner']:,}** 🪙", inline=True)
-            result_embed.add_field(name="🎫 TOTAL ENTRIES", value=f"**{giveaway['total_entries']:,}**", inline=True)
-            result_embed.add_field(name="👥 PARTICIPANTS", value=f"**{len(giveaway['entries'])}**", inline=True)
-            result_embed.add_field(name="⏰ DURATION", value="**25 seconds**", inline=True)
-            
-            # Winners list
-            if winner_mentions:
-                winners_text = "\n".join(winner_mentions)
-                if len(winners_text) > 1024:
-                    winners_text = f"🎉 {len(unique_winners)} winners selected!"
-                result_embed.add_field(name="🎊 LUCKY WINNERS", value=winners_text, inline=False)
-            
-            result_embed.set_footer(
-                text="Congratulations to the winners! • Tokens have been distributed",
-                icon_url="https://cdn.discordapp.com/emojis/1125274830004781156.webp?size=96&quality=lossless"
-            )
-            
-            # Log the giveaway
-            await log_action(
-                "GIVEAWAY",
-                "🎉 Giveaway Completed",
-                f"**{interaction.user.mention}** hosted a giveaway of **{giveaway['amount']:,} tokens**",
-                color=0xFFD700,
-                user=interaction.user,
-                fields=[
-                    {"name": "Total Prize", "value": f"{giveaway['amount']:,} 🪙", "inline": True},
-                    {"name": "Winners", "value": f"{len(unique_winners)}/{giveaway['winners']}", "inline": True},
-                    {"name": "Prize per Winner", "value": f"{giveaway['prize_per_winner']:,} 🪙", "inline": True},
-                    {"name": "Total Entries", "value": f"{giveaway['total_entries']:,}", "inline": True},
-                    {"name": "Unique Participants", "value": f"{len(giveaway['entries'])}", "inline": True},
-                    {"name": "Winners", "value": "\n".join(winner_mentions) if winner_mentions else "No winners", "inline": False}
-                ]
-            )
-            
-            # Update the message
-            try:
-                await interaction.edit_original_response(embed=result_embed, view=None)
-            except:
-                pass
-            
+                    pass
+                
         else:
             # No entries, refund the creator
             update_balance(interaction.user.id, giveaway['amount'])
@@ -2542,8 +2577,6 @@ async def giveaway(interaction: discord.Interaction, amount: str, winners: int):
                 description="No one entered the giveaway. Tokens have been refunded.",
                 color=0xff4444
             )
-            
-            refund_embed.set_footer(text="Better luck next time!")
             
             try:
                 await interaction.edit_original_response(embed=refund_embed, view=None)
