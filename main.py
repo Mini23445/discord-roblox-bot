@@ -1116,15 +1116,16 @@ class MinesView(discord.ui.View):
         for i in range(25):
             self.add_item(MinesButton(i))
     
-        @discord.ui.button(label="💰 Cash Out", style=discord.ButtonStyle.green, row=5)
+        class SomeView(discord.ui.View):  # <-- your class name
+    @discord.ui.button(label="💰 Cash Out", style=discord.ButtonStyle.green, row=5)
     async def cash_out(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Get the game data
         if self.game_id not in active_mines_games:
             await interaction.response.send_message("❌ This game has expired!", ephemeral=True)
             return
-        
+
         game = active_mines_games[self.game_id]
-        
+
         # Calculate winnings
         multiplier = MINES_MULTIPLIERS.get(len(game['revealed']), 1.0)
         winnings = int(game['bet'] * multiplier)
