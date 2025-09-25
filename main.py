@@ -1130,8 +1130,11 @@ class MinesView(discord.ui.View):
         multiplier = MINES_MULTIPLIERS.get(len(game['revealed']), 1.0)
         winnings = int(game['bet'] * multiplier)
         
+    async def handle_cash_out(interaction, winnings):
         # Update user balance
         update_balance(interaction.user.id, winnings)
+
+        # Save data asynchronously
         await save_data()
         
         # Reveal all mines and disable all buttons
