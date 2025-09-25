@@ -19,13 +19,14 @@ print("🚀 Starting Discord Bot...")
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
+intents.invites = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # Configuration
-ADMIN_ROLE_ID = 1405525451807522847
-LOG_CHANNEL_ID = 1405523340252282972
-PURCHASE_LOG_CHANNEL_ID = 1405524961124417588
+ADMIN_ROLE_ID = 1410911675351306250
+LOG_CHANNEL_ID = 1413818486404415590
+PURCHASE_LOG_CHANNEL_ID = 1413885597826813972
 
 # Coinflip configuration
 coinflip_config = {
@@ -58,6 +59,8 @@ pending_duels = {}
 active_giveaways = {}
 giveaway_daily_totals = {}  # Track daily giveaway amounts
 active_mines_games = {}  # Track active mines games
+invite_data = {}  # Track invites: {inviter_id: {invited_users: [], total_invites: 0, tokens_earned: 0}}
+user_message_times = {}  # Anti-spam tracking: {user_id: [timestamp1, timestamp2, ...]}
 
 # Data file paths
 USER_DATA_FILE = 'user_data.json'
@@ -66,6 +69,8 @@ COOLDOWNS_FILE = 'cooldowns.json'
 GIVEAWAYS_FILE = 'giveaways.json'
 DAILY_GIVEAWAYS_FILE = 'daily_giveaways.json'
 COINFLIP_CONFIG_FILE = 'coinflip_config.json'
+INVITE_DATA_FILE = 'invite_data.json'
+ANTISPAM_DATA_FILE = 'antispam_data.json'
 
 WORK_JOBS = [
     "worked as a cashier at the supermarket", "stocked shelves at the grocery store", 
@@ -119,7 +124,7 @@ CRIME_ACTIVITIES = [
 
 async def load_data():
     """Load all data from files"""
-    global user_data, shop_data, cooldowns, active_giveaways, giveaway_daily_totals, coinflip_config
+    global user_data, shop_data, cooldowns, active_giveaways, giveaway_daily_totals, coinflip_config, invite_data, user_message_times
     
     try:
         # Load user data
@@ -182,6 +187,26 @@ async def load_data():
             print("ℹ️ No coinflip config file found, using defaults")
             coinflip_config = {"win_chance": 45, "max_bet": 1000}
             
+        # Load invite data
+        if os.path.exists(INVITE_DATA_FILE):
+            async with aiofiles.open(INVITE_DATA_FILE, 'r') as f:
+                contents = await f.read()
+                invite_data = json.loads(contents)
+                print(f"✅ Loaded invite data for {len(invite_data)} inviters")
+        else:
+            print("ℹ️ No invite data file found, starting fresh")
+            invite_data = {}
+            
+        # Load anti-spam data
+        if os.path.exists(ANTISPAM_DATA_FILE):
+            async with aiofiles.open(ANTISPAM_DATA_FILE, 'r') as f:
+                contents = await f.read()
+                user_message_times = json.loads(contents)
+                print("✅ Loaded anti-spam data")
+        else:
+            print("ℹ️ No anti-spam data file found, starting fresh")
+            user_message_times = {}
+            
     except Exception as e:
         print(f"⚠️ Error loading data: {e}")
         # Initialize empty data structures if loading fails
@@ -191,6 +216,8 @@ async def load_data():
         active_giveaways = {}
         giveaway_daily_totals = {}
         coinflip_config = {"win_chance": 45, "max_bet": 1000}
+        invite_data = {}
+        user_message_times = {}
 
 def parse_amount(amount_str):
     """Parse amount strings with k, m, b suffixes"""
@@ -246,6 +273,14 @@ async def save_data():
         # Save coinflip configuration
         async with aiofiles.open(COINFLIP_CONFIG_FILE, 'w') as f:
             await f.write(json.dumps(coinflip_config, indent=2))
+            
+        # Save invite data
+        async with aiofiles.open(INVITE_DATA_FILE, 'w') as f:
+            await f.write(json.dumps(invite_data, indent=2))
+            
+        # Save anti-spam data
+        async with aiofiles.open(ANTISPAM_DATA_FILE, 'w') as f:
+            await f.write(json.dumps(user_message_times, indent=2))
             
         print("💾 Data saved successfully")
         return True
@@ -399,6 +434,35 @@ def is_admin(user):
     """Check if user is admin"""
     return any(role.id == ADMIN_ROLE_ID for role in user.roles)
 
+def check_spam(user_id):
+    """Check if user is spamming and deduct tokens if they are"""
+    current_time = time.time()
+    user_id_str = str(user_id)
+    
+    if user_id_str not in user_message_times:
+        user_message_times[user_id_str] = []
+    
+    # Remove timestamps older than 10 seconds
+    user_message_times[user_id_str] = [t for t in user_message_times[user_id_str] if current_time - t < 10]
+    
+    # Add current timestamp
+    user_message_times[user_id_str].append(current_time)
+    
+    # Check if user has sent more than 5 messages in 10 seconds
+    if len(user_message_times[user_id_str]) > 5:
+        # Deduct 50 tokens for spamming
+        balance_before = get_user_balance(user_id)
+        if balance_before >= 50:
+            new_balance = update_balance(user_id, -50)
+            asyncio.create_task(save_data())
+            
+            # Clear the message times to prevent multiple deductions
+            user_message_times[user_id_str] = []
+            
+            return True, balance_before, new_balance
+    
+    return False, 0, 0
+
 # Auto-save task
 async def auto_save():
     """Auto save every 30 seconds"""
@@ -480,6 +544,23 @@ async def reset_daily_giveaway_totals():
         await save_data()
         print("🔄 Reset daily giveaway totals")
 
+# Clean up old anti-spam data
+async def cleanup_antispam_data():
+    """Clean up old anti-spam data"""
+    while True:
+        await asyncio.sleep(3600)  # 1 hour
+        current_time = time.time()
+        
+        for user_id in list(user_message_times.keys()):
+            # Remove all timestamps older than 1 hour
+            user_message_times[user_id] = [t for t in user_message_times[user_id] if current_time - t < 3600]
+            
+            # Remove user entry if no recent messages
+            if not user_message_times[user_id]:
+                del user_message_times[user_id]
+        
+        await save_data()
+
 @bot.event
 async def on_ready():
     print(f'🚀 {bot.user} is online!')
@@ -491,6 +572,7 @@ async def on_ready():
     bot.giveaway_cleanup_task = asyncio.create_task(cleanup_expired_giveaways())
     bot.mines_cleanup_task = asyncio.create_task(cleanup_expired_mines())
     bot.daily_reset_task = asyncio.create_task(reset_daily_giveaway_totals())
+    bot.antispam_cleanup_task = asyncio.create_task(cleanup_antispam_data())
     
     try:
         synced = await bot.tree.sync()
@@ -501,9 +583,217 @@ async def on_ready():
 @bot.event
 async def on_message(message):
     if not message.author.bot and message.guild:
+        # Check for spam
+        is_spam, old_balance, new_balance = check_spam(message.author.id)
+        if is_spam:
+            try:
+                embed = discord.Embed(
+                    title="⚠️ Anti-Spam System",
+                    description="You have been detected sending messages too quickly!",
+                    color=0xff4444,
+                    timestamp=datetime.now()
+                )
+                embed.add_field(name="Penalty", value="-50 🪙", inline=True)
+                embed.add_field(name="Old Balance", value=f"{old_balance:,} 🪙", inline=True)
+                embed.add_field(name="New Balance", value=f"{new_balance:,} 🪙", inline=True)
+                embed.set_footer(text="Please wait between messages to avoid penalties")
+                await message.channel.send(embed=embed, delete_after=10)
+            except:
+                pass
+        
+        # Award tokens for normal messages (if not spamming)
         tokens = random.randint(1, 5)
         update_balance(message.author.id, tokens)
+    
     await bot.process_commands(message)
+
+@bot.event
+async def on_member_join(member):
+    """Check if member was invited by someone and reward the inviter"""
+    try:
+        # Check if the member's account is 30 days or older
+        account_age = datetime.now().astimezone() - member.created_at
+        if account_age.days < 30:
+            print(f"❌ {member} joined but account is too new ({account_age.days} days)")
+            return
+        
+        # Try to get the invite used
+        invites_before = await member.guild.invites()
+        await asyncio.sleep(5)  # Wait a bit for Discord to update
+        invites_after = await member.guild.invites()
+        
+        used_invite = None
+        for invite in invites_before:
+            after_invite = next((inv for inv in invites_after if inv.code == invite.code), None)
+            if after_invite and after_invite.uses > invite.uses:
+                used_invite = after_invite
+                break
+        
+        if used_invite and used_invite.inviter and not used_invite.inviter.bot:
+            inviter_id = str(used_invite.inviter.id)
+            invited_id = str(member.id)
+            
+            # Initialize inviter data if not exists
+            if inviter_id not in invite_data:
+                invite_data[inviter_id] = {
+                    'invited_users': [],
+                    'total_invites': 0,
+                    'tokens_earned': 0
+                }
+            
+            # Check if this user was already tracked
+            if invited_id not in invite_data[inviter_id]['invited_users']:
+                # Reward inviter with 300 tokens
+                update_balance(int(inviter_id), 300)
+                invite_data[inviter_id]['invited_users'].append(invited_id)
+                invite_data[inviter_id]['total_invites'] += 1
+                invite_data[inviter_id]['tokens_earned'] += 300
+                
+                await save_data()
+                
+                # Send DM to inviter
+                try:
+                    embed = discord.Embed(
+                        title="🎉 Invite Reward!",
+                        description=f"You invited {member.mention} and got 300 tokens!",
+                        color=0x00ff00,
+                        timestamp=datetime.now()
+                    )
+                    embed.add_field(name="Invited User", value=member.display_name, inline=True)
+                    embed.add_field(name="Reward", value="300 🪙", inline=True)
+                    embed.add_field(name="Total Invites", value=invite_data[inviter_id]['total_invites'], inline=True)
+                    embed.set_footer(text="IM's Universe")
+                    
+                    await used_invite.inviter.send(embed=embed)
+                except:
+                    print(f"⚠️ Could not DM {used_invite.inviter} about invite reward")
+                
+                print(f"✅ {used_invite.inviter} rewarded 300 tokens for inviting {member}")
+    except Exception as e:
+        print(f"⚠️ Error processing member join: {e}")
+
+# Invite Panel View
+class InvitePanelView(discord.ui.View):
+    def __init__(self, user_id):
+        super().__init__(timeout=300)
+        self.user_id = user_id
+    
+    @discord.ui.button(label="🔗 Generate Invite Link", style=discord.ButtonStyle.green, emoji="🔗")
+    async def generate_invite(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ This is not your panel!", ephemeral=True)
+            return
+        
+        try:
+            # Create an invite for the server
+            guild = interaction.guild
+            invite = await guild.text_channels[0].create_invite(max_uses=1, unique=True, max_age=604800)  # 7 days
+            
+            embed = discord.Embed(
+                title="🔗 Your Personal Invite Link",
+                description=f"Share this link to invite friends to the server!",
+                color=0x0099ff
+            )
+            embed.add_field(name="Invite Link", value=invite.url, inline=False)
+            embed.add_field(name="Reward", value="300 🪙 per valid invite", inline=True)
+            embed.add_field(name="Requirements", value="Account must be 30+ days old", inline=True)
+            embed.set_footer(text="You'll receive a DM when someone joins using your link")
+            
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message("❌ Could not generate invite link. Please try again.", ephemeral=True)
+    
+    @discord.ui.button(label="📊 View My Invites", style=discord.ButtonStyle.blurple, emoji="📊")
+    async def view_invites(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ This is not your panel!", ephemeral=True)
+            return
+        
+        user_id_str = str(interaction.user.id)
+        user_invites = invite_data.get(user_id_str, {
+            'invited_users': [],
+            'total_invites': 0,
+            'tokens_earned': 0
+        })
+        
+        embed = discord.Embed(
+            title="📊 Your Invite Statistics",
+            description="Track your invites and rewards",
+            color=0x0099ff,
+            timestamp=datetime.now()
+        )
+        
+        embed.add_field(name="Total Invites", value=user_invites['total_invites'], inline=True)
+        embed.add_field(name="Tokens Earned", value=f"{user_invites['tokens_earned']:,} 🪙", inline=True)
+        embed.add_field(name="Reward per Invite", value="300 🪙", inline=True)
+        
+        if user_invites['invited_users']:
+            # Show recent invites (last 5)
+            recent_invites = user_invites['invited_users'][-5:]
+            invite_text = ""
+            for invited_id in recent_invites:
+                try:
+                    user = await bot.fetch_user(int(invited_id))
+                    invite_text += f"• {user.mention}\n"
+                except:
+                    invite_text += f"• Unknown User (ID: {invited_id})\n"
+            
+            if len(user_invites['invited_users']) > 5:
+                invite_text += f"\n... and {len(user_invites['invited_users']) - 5} more"
+            
+            embed.add_field(name="Recent Invites", value=invite_text, inline=False)
+        else:
+            embed.add_field(name="Recent Invites", value="No invites yet", inline=False)
+        
+        embed.set_footer(text="Keep inviting to earn more tokens!")
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="invitespanel", description="View invite rewards information and manage your invites")
+async def invitespanel(interaction: discord.Interaction):
+    """Display the invite rewards panel"""
+    embed = discord.Embed(
+        title="🎉 Invite Rewards System",
+        description="Earn tokens by inviting friends to the server!",
+        color=0x0099ff,
+        timestamp=datetime.now()
+    )
+    
+    embed.add_field(
+        name="💰 Reward System",
+        value="• **300 🪙** per valid invite\n• Account must be **30+ days old**\n• You'll receive a DM when rewarded\n• No limit on invites!",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📋 How It Works",
+        value="1. Generate your personal invite link\n2. Share it with friends\n3. When they join, you get 300 tokens\n4. Track your invites and earnings",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="⚠️ Requirements",
+        value="• Invited accounts must be 30+ days old\n• Must use your personal invite link\n• Bot must have permissions to track invites",
+        inline=False
+    )
+    
+    user_id_str = str(interaction.user.id)
+    user_invites = invite_data.get(user_id_str, {
+        'invited_users': [],
+        'total_invites': 0,
+        'tokens_earned': 0
+    })
+    
+    embed.add_field(
+        name="📊 Your Stats",
+        value=f"**Total Invites:** {user_invites['total_invites']}\n**Tokens Earned:** {user_invites['tokens_earned']:,} 🪙",
+        inline=False
+    )
+    
+    embed.set_footer(text="Use the buttons below to manage your invites")
+    
+    view = InvitePanelView(interaction.user.id)
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 @bot.tree.command(name="balance", description="Check your token balance")
 async def balance(interaction: discord.Interaction):
@@ -612,18 +902,20 @@ async def crime(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="coinflip", description="Bet tokens on a coinflip")
-async def coinflip(interaction: discord.Interaction, amount: int, choice: str):
+async def coinflip(interaction: discord.Interaction, amount: str, choice: str):  # Changed to string for amount
     if not can_use_short_cooldown(interaction.user.id, "coinflip", 5):
         await interaction.response.send_message("⏰ Please wait 5 seconds between coinflips!", ephemeral=True)
         return
     
-    # Check max bet
-    if amount > coinflip_config["max_bet"]:
-        await interaction.response.send_message(f"❌ Maximum bet is {coinflip_config['max_bet']:,} tokens!", ephemeral=True)
+    # Parse amount with suffixes
+    parsed_amount = parse_amount(amount)
+    if parsed_amount is None or parsed_amount <= 0:
+        await interaction.response.send_message("❌ Invalid amount! Use numbers or suffixes like 10k, 1m, 1b", ephemeral=True)
         return
     
-    if amount <= 0:
-        await interaction.response.send_message("❌ Bet amount must be greater than 0!", ephemeral=True)
+    # Check max bet
+    if parsed_amount > coinflip_config["max_bet"]:
+        await interaction.response.send_message(f"❌ Maximum bet is {coinflip_config['max_bet']:,} tokens!", ephemeral=True)
         return
     
     choice = choice.lower()
@@ -637,8 +929,8 @@ async def coinflip(interaction: discord.Interaction, amount: int, choice: str):
         choice = 'tails'
     
     balance = get_user_balance(interaction.user.id)
-    if balance < amount:
-        await interaction.response.send_message(f"❌ Insufficient funds! You need **{amount - balance:,}** more tokens.", ephemeral=True)
+    if balance < parsed_amount:
+        await interaction.response.send_message(f"❌ Insufficient funds! You need **{parsed_amount - balance:,}** more tokens.", ephemeral=True)
         return
 
     # More natural coinflip with configurable odds
@@ -661,7 +953,7 @@ async def coinflip(interaction: discord.Interaction, amount: int, choice: str):
     
     if won:
         # Player wins their bet
-        winnings = amount
+        winnings = parsed_amount
         new_balance = update_balance(interaction.user.id, winnings)
         embed = discord.Embed(title="🪙 Coinflip - YOU WON!", color=0x00ff00)
         embed.add_field(name="Your Choice", value=choice.title(), inline=True)
@@ -669,11 +961,11 @@ async def coinflip(interaction: discord.Interaction, amount: int, choice: str):
         embed.add_field(name="Winnings", value=f"+{winnings:,} 🪙", inline=True)
     else:
         # Player loses their bet
-        new_balance = update_balance(interaction.user.id, -amount)
+        new_balance = update_balance(interaction.user.id, -parsed_amount)
         embed = discord.Embed(title="🪙 Coinflip - YOU LOST!", color=0xff4444)
         embed.add_field(name="Your Choice", value=choice.title(), inline=True)
         embed.add_field(name="Result", value=f"🪙 {result.title()}", inline=True)
-        embed.add_field(name="Lost", value=f"-{amount:,} 🪙", inline=True)
+        embed.add_field(name="Lost", value=f"-{parsed_amount:,} 🪙", inline=True)
     
     embed.add_field(name="New Balance", value=f"{new_balance:,} 🪙", inline=False)
     embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
@@ -684,11 +976,11 @@ async def coinflip(interaction: discord.Interaction, amount: int, choice: str):
     await log_action(
         "COINFLIP",
         f"🪙 Coinflip {'Win' if won else 'Loss'}",
-        f"{interaction.user.mention} {'won' if won else 'lost'} **{amount:,} tokens** on coinflip",
+        f"{interaction.user.mention} {'won' if won else 'lost'} **{parsed_amount:,} tokens** on coinflip",
         color=0x00ff00 if won else 0xff4444,
         user=interaction.user,
         fields=[
-            {"name": "Bet Amount", "value": f"{amount:,} 🪙", "inline": True},
+            {"name": "Bet Amount", "value": f"{parsed_amount:,} 🪙", "inline": True},
             {"name": "Choice", "value": choice.title(), "inline": True},
             {"name": "Result", "value": result.title(), "inline": True},
             {"name": "Outcome", "value": "Won" if won else "Lost", "inline": True}
@@ -865,18 +1157,24 @@ class MinesView(discord.ui.View):
         )
 
 @bot.tree.command(name="mines", description="Play mines game - find gems to multiply your bet!")
-async def mines(interaction: discord.Interaction, amount: int, mines_count: int):
+async def mines(interaction: discord.Interaction, amount: str, mines_count: int):  # Changed to string for amount
     # Check cooldown
     if not can_use_short_cooldown(interaction.user.id, "mines", 10):
         await interaction.response.send_message("⏰ Please wait 10 seconds between mines games!", ephemeral=True)
         return
     
+    # Parse amount with suffixes
+    parsed_amount = parse_amount(amount)
+    if parsed_amount is None or parsed_amount <= 0:
+        await interaction.response.send_message("❌ Invalid amount! Use numbers or suffixes like 10k, 1m, 1b", ephemeral=True)
+        return
+    
     # Validate parameters
-    if amount < 100:
+    if parsed_amount < 100:
         await interaction.response.send_message("❌ Minimum bet is 100 tokens!", ephemeral=True)
         return
     
-    if amount > 1000:
+    if parsed_amount > 1000:
         await interaction.response.send_message("❌ Maximum bet is 1,000 tokens!", ephemeral=True)
         return
     
@@ -886,12 +1184,12 @@ async def mines(interaction: discord.Interaction, amount: int, mines_count: int)
     
     # Check balance
     balance = get_user_balance(interaction.user.id)
-    if balance < amount:
-        await interaction.response.send_message(f"❌ You need **{amount - balance:,}** more tokens to play!", ephemeral=True)
+    if balance < parsed_amount:
+        await interaction.response.send_message(f"❌ You need **{parsed_amount - balance:,}** more tokens to play!", ephemeral=True)
         return
     
     # Deduct bet amount
-    update_balance(interaction.user.id, -amount)
+    update_balance(interaction.user.id, -parsed_amount)
     set_short_cooldown(interaction.user.id, "mines")
     await save_data()
     
@@ -903,7 +1201,7 @@ async def mines(interaction: discord.Interaction, amount: int, mines_count: int)
     mines_positions = random.sample(all_positions, mines_count)
     
     active_mines_games[game_id] = {
-        'bet': amount,
+        'bet': parsed_amount,
         'mines': mines_positions,
         'mines_count': mines_count,
         'revealed': [],
@@ -917,10 +1215,10 @@ async def mines(interaction: discord.Interaction, amount: int, mines_count: int)
         description=f"Click on squares to reveal gems. Avoid the mines!",
         color=0x00ff00
     )
-    embed.add_field(name="Bet Amount", value=f"{amount:,} 🪙", inline=True)
+    embed.add_field(name="Bet Amount", value=f"{parsed_amount:,} 🪙", inline=True)
     embed.add_field(name="Safe Spots Found", value="0", inline=True)
     embed.add_field(name="Current Multiplier", value="1.00x", inline=True)
-    embed.add_field(name="Potential Win", value=f"{amount:,} 🪙", inline=True)
+    embed.add_field(name="Potential Win", value=f"{parsed_amount:,} 🪙", inline=True)
     embed.add_field(name="Mines", value=f"{mines_count} / 25", inline=True)
     embed.add_field(name="‎", value="‎", inline=True)
     embed.set_footer(text="Click 'Cash Out' to collect your winnings!")
@@ -943,7 +1241,7 @@ class CoinflipConfigModal(discord.ui.Modal):
     )
     
     max_bet = discord.ui.TextInput(
-        label="Max Bet",
+        label="Max Bet (supports k, m, b suffixes)",
         placeholder="Enter maximum bet amount",
         default=str(coinflip_config["max_bet"]),
         min_length=1,
@@ -967,10 +1265,10 @@ class CoinflipConfigModal(discord.ui.Modal):
         try:
             max_bet = parse_amount(self.max_bet.value)
             if max_bet is None or max_bet <= 0:
-                await interaction.response.send_message("❌ Max bet must be a valid number!", ephemeral=True)
+                await interaction.response.send_message("❌ Max bet must be a valid number! Use numbers or suffixes like 10k, 1m, 1b", ephemeral=True)
                 return
         except ValueError:
-            await interaction.response.send_message("❌ Max bet must be a valid number!", ephemeral=True)
+            await interaction.response.send_message("❌ Max bet must be a valid number! Use numbers or suffixes like 10k, 1m, 1b", ephemeral=True)
             return
         
         # Update configuration
@@ -1013,8 +1311,6 @@ async def on_app_command_error(interaction: discord.Interaction, error):
         await interaction.response.send_message("❌ You don't have permission to use this command!", ephemeral=True)
     else:
         raise error
-
-# ===== ALL YOUR EXISTING CODE CONTINUES BELOW =====
 
 class DuelAcceptView(discord.ui.View):
     def __init__(self, challenger_id, challenged_id, amount):
@@ -1102,13 +1398,15 @@ class DuelAcceptView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=None)
 
 @bot.tree.command(name="duel", description="Challenge another user to a coinflip duel")
-async def duel(interaction: discord.Interaction, user: discord.Member, amount: int):
+async def duel(interaction: discord.Interaction, user: discord.Member, amount: str):  # Changed to string for amount
     if not can_use_short_cooldown(interaction.user.id, "duel", 10):
         await interaction.response.send_message("⏰ Please wait 10 seconds between duel challenges!", ephemeral=True)
         return
     
-    if amount <= 0:
-        await interaction.response.send_message("❌ Duel amount must be greater than 0!", ephemeral=True)
+    # Parse amount with suffixes
+    parsed_amount = parse_amount(amount)
+    if parsed_amount is None or parsed_amount <= 0:
+        await interaction.response.send_message("❌ Invalid amount! Use numbers or suffixes like 10k, 1m, 1b", ephemeral=True)
         return
     
     if user.id == interaction.user.id:
@@ -1120,13 +1418,13 @@ async def duel(interaction: discord.Interaction, user: discord.Member, amount: i
         return
     
     challenger_balance = get_user_balance(interaction.user.id)
-    if challenger_balance < amount:
-        await interaction.response.send_message(f"❌ You need **{amount - challenger_balance:,}** more tokens to make this challenge!", ephemeral=True)
+    if challenger_balance < parsed_amount:
+        await interaction.response.send_message(f"❌ You need **{parsed_amount - challenger_balance:,}** more tokens to make this challenge!", ephemeral=True)
         return
     
     challenged_balance = get_user_balance(user.id)
-    if challenged_balance < amount:
-        await interaction.response.send_message(f"❌ {user.mention} doesn't have enough tokens for this duel! They need {amount - challenged_balance:,} more.", ephemeral=True)
+    if challenged_balance < parsed_amount:
+        await interaction.response.send_message(f"❌ {user.mention} doesn't have enough tokens for this duel! They need {parsed_amount - challenged_balance:,} more.", ephemeral=True)
         return
     
     duel_key = f"{interaction.user.id}_{user.id}"
@@ -1139,7 +1437,7 @@ async def duel(interaction: discord.Interaction, user: discord.Member, amount: i
     pending_duels[duel_key] = {
         'challenger': interaction.user.id,
         'challenged': user.id,
-        'amount': amount,
+        'amount': parsed_amount,
         'created_at': datetime.now()
     }
     
@@ -1151,7 +1449,7 @@ async def duel(interaction: discord.Interaction, user: discord.Member, amount: i
         color=0xFFD700
     )
     
-    embed.add_field(name="💰 Stakes", value=f"{amount:,} 🪙", inline=True)
+    embed.add_field(name="💰 Stakes", value=f"{parsed_amount:,} 🪙", inline=True)
     embed.add_field(name="🎯 Rules", value="Winner takes all!\nCoinflip decides the victor", inline=True)
     embed.add_field(name="⏰ Expires", value="60 seconds", inline=True)
     
@@ -1161,20 +1459,22 @@ async def duel(interaction: discord.Interaction, user: discord.Member, amount: i
     
     embed.set_footer(text=f"{user.display_name}, will you accept this challenge?")
     
-    view = DuelAcceptView(interaction.user.id, user.id, amount)
+    view = DuelAcceptView(interaction.user.id, user.id, parsed_amount)
     await interaction.response.send_message(embed=embed, view=view)
 
 @bot.tree.command(name="gift", description="Gift tokens to another user (max 3k per day)")
-async def gift(interaction: discord.Interaction, user: discord.Member, amount: int):
+async def gift(interaction: discord.Interaction, user: discord.Member, amount: str):  # Changed to string for amount
     if not can_use_short_cooldown(interaction.user.id, "gift", 3):
         await interaction.response.send_message("⏰ Please wait 3 seconds between gifts!", ephemeral=True)
         return
     
-    if amount <= 0:
-        await interaction.response.send_message("❌ Amount must be greater than 0!", ephemeral=True)
+    # Parse amount with suffixes
+    parsed_amount = parse_amount(amount)
+    if parsed_amount is None or parsed_amount <= 0:
+        await interaction.response.send_message("❌ Invalid amount! Use numbers or suffixes like 10k, 1m, 1b", ephemeral=True)
         return
     
-    if amount > 3000:
+    if parsed_amount > 3000:
         await interaction.response.send_message("❌ You can only gift up to 3,000 tokens per day!", ephemeral=True)
         return
     
@@ -1196,37 +1496,37 @@ async def gift(interaction: discord.Interaction, user: discord.Member, amount: i
     if today not in giveaway_daily_totals[user_id]:
         giveaway_daily_totals[user_id][today] = 0
     
-    if giveaway_daily_totals[user_id][today] + amount > 3000:
+    if giveaway_daily_totals[user_id][today] + parsed_amount > 3000:
         remaining = 3000 - giveaway_daily_totals[user_id][today]
         await interaction.response.send_message(f"❌ You can only gift {remaining:,} more tokens today!", ephemeral=True)
         return
     
     giver_balance = get_user_balance(interaction.user.id)
-    if giver_balance < amount:
-        await interaction.response.send_message(f"❌ Need **{amount - giver_balance:,}** more tokens!", ephemeral=True)
+    if giver_balance < parsed_amount:
+        await interaction.response.send_message(f"❌ Need **{parsed_amount - giver_balance:,}** more tokens!", ephemeral=True)
         return
     
-    update_balance(interaction.user.id, -amount)
-    update_balance(user.id, amount)
-    giveaway_daily_totals[user_id][today] += amount
+    update_balance(interaction.user.id, -parsed_amount)
+    update_balance(user.id, parsed_amount)
+    giveaway_daily_totals[user_id][today] += parsed_amount
     set_short_cooldown(interaction.user.id, "gift")
     await save_data()
     
     await log_action(
         "GIFT",
         "🎁 Token Gift",
-        f"{interaction.user.mention} gifted **{amount:,} tokens** to {user.mention}",
+        f"{interaction.user.mention} gifted **{parsed_amount:,} tokens** to {user.mention}",
         color=0xffb347,
         user=interaction.user,
         fields=[
             {"name": "Giver", "value": interaction.user.mention, "inline": True},
             {"name": "Receiver", "value": user.mention, "inline": True},
-            {"name": "Amount", "value": f"{amount:,} 🪙", "inline": True},
+            {"name": "Amount", "value": f"{parsed_amount:,} 🪙", "inline": True},
             {"name": "Daily Total", "value": f"{giveaway_daily_totals[user_id][today]:,}/3,000 🪙", "inline": True}
         ]
     )
     
-    message = f"🎁 {interaction.user.mention} gifted **{amount:,} tokens** 🪙 to {user.mention}! 🎉"
+    message = f"🎁 {interaction.user.mention} gifted **{parsed_amount:,} tokens** 🪙 to {user.mention}! 🎉"
     await interaction.response.send_message(message)
 
 # Purchase confirmation view
@@ -1276,24 +1576,19 @@ class PurchaseConfirmView(discord.ui.View):
         embed = discord.Embed(title="❌ Purchase Cancelled", description="Your purchase has been cancelled.", color=0xff4444)
         await interaction.response.edit_message(embed=embed, view=None)
 
-# Shop view with buttons - FIXED
+# Shop view with buttons
 class ShopView(discord.ui.View):
     def __init__(self, user_balance):
         super().__init__(timeout=300)
         self.user_balance = user_balance
         
-        for i, item in enumerate(shop_data[:25]):  # Maximum 25 items
+        for i, item in enumerate(shop_data[:25]):
             affordable = user_balance >= item['price']
-            
-            # Calculate row (0-4) and ensure it's within valid range
-            row = i // 5  # This gives us rows 0, 1, 2, 3, 4 for items 0-24
-            
             button = discord.ui.Button(
                 label=f"{item['name']} - {item['price']:,}🪙",
                 style=discord.ButtonStyle.green if affordable else discord.ButtonStyle.grey,
                 disabled=not affordable,
-                custom_id=f"buy_{i}",
-                row=row  # Explicitly set the row
+                custom_id=f"buy_{i}"
             )
             button.callback = self.create_buy_callback(i)
             self.add_item(button)
@@ -1423,7 +1718,7 @@ class AddItemModal(discord.ui.Modal):
         super().__init__(title="Add Shop Item")
     
     name = discord.ui.TextInput(label="Item Name")
-    price = discord.ui.TextInput(label="Price (supports k, m, b suffixes)")  # Updated label
+    price = discord.ui.TextInput(label="Price (supports k, m, b suffixes)")
     description = discord.ui.TextInput(label="Description", required=False, style=discord.TextStyle.long)
     
     async def on_submit(self, interaction: discord.Interaction):
@@ -1478,7 +1773,7 @@ class UpdateItemModal(discord.ui.Modal):
     
     item_number = discord.ui.TextInput(label="Item Number", placeholder="Enter number (1, 2, 3...)")
     name = discord.ui.TextInput(label="New Name (optional)", required=False)
-    price = discord.ui.TextInput(label="New Price (optional, supports k, m, b)", required=False)  # Updated label
+    price = discord.ui.TextInput(label="New Price (optional, supports k, m, b)", required=False)
     description = discord.ui.TextInput(label="New Description (optional)", required=False, style=discord.TextStyle.long)
     
     async def on_submit(self, interaction: discord.Interaction):
@@ -1669,9 +1964,11 @@ class ResetConfirmView(discord.ui.View):
             return
         
         # Reset all data
-        global user_data, cooldowns
+        global user_data, cooldowns, invite_data, user_message_times
         user_data.clear()
         cooldowns = {"daily": {}, "work": {}, "crime": {}, "gift": {}, "buy": {}, "coinflip": {}, "duel": {}, "giveaway": {}, "mines": {}}
+        invite_data.clear()
+        user_message_times.clear()
         await save_data()
         
         success_embed = discord.Embed(
@@ -1729,7 +2026,9 @@ async def resetdata(interaction: discord.Interaction, confirmation_code: str):
                    "• All user balances\n"
                    "• All earning/spending history\n"
                    "• All cooldown timers\n"
-                   "• Purchase records\n\n"
+                   "• Purchase records\n"
+                   "• Invite data\n"
+                   "• Anti-spam data\n\n"
                    "**THIS CANNOT BE UNDONE!**",
         color=0xff0000
     )
@@ -1975,18 +2274,24 @@ class GiveawayEnterView(discord.ui.View):
         )
 
 @bot.tree.command(name="giveaway", description="Start a token giveaway (25 seconds)")
-async def giveaway(interaction: discord.Interaction, amount: int, winners: int):
+async def giveaway(interaction: discord.Interaction, amount: str, winners: int):  # Changed to string for amount
     # Check cooldown - 30 seconds for giveaways
     if not can_use_short_cooldown(interaction.user.id, "giveaway", 30):
         await interaction.response.send_message("⏰ Please wait 30 seconds before starting another giveaway!", ephemeral=True)
         return
     
+    # Parse amount with suffixes
+    parsed_amount = parse_amount(amount)
+    if parsed_amount is None or parsed_amount <= 0:
+        await interaction.response.send_message("❌ Invalid amount! Use numbers or suffixes like 10k, 1m, 1b", ephemeral=True)
+        return
+    
     # Validate parameters - Minimum 50 tokens, maximum 5k for giveaway
-    if amount < 50:
+    if parsed_amount < 50:
         await interaction.response.send_message("❌ Minimum giveaway amount is 50 tokens!", ephemeral=True)
         return
     
-    if amount > 5000:
+    if parsed_amount > 5000:
         await interaction.response.send_message("❌ Maximum giveaway amount is 5,000 tokens!", ephemeral=True)
         return
     
@@ -2005,7 +2310,7 @@ async def giveaway(interaction: discord.Interaction, amount: int, winners: int):
         giveaway_daily_totals[user_id][today] = 0
     
     # Changed from 50000 to 5000
-    if giveaway_daily_totals[user_id][today] + amount > 5000:
+    if giveaway_daily_totals[user_id][today] + parsed_amount > 5000:
         remaining = 5000 - giveaway_daily_totals[user_id][today]
         await interaction.response.send_message(
             f"❌ You can only giveaway {remaining:,} more tokens today! (5k daily limit)",  # Updated message
@@ -2015,22 +2320,22 @@ async def giveaway(interaction: discord.Interaction, amount: int, winners: int):
     
     # Check if user has enough tokens
     balance = get_user_balance(interaction.user.id)
-    if balance < amount:
-        await interaction.response.send_message(f"❌ You need **{amount - balance:,}** more tokens to start this giveaway!", ephemeral=True)
+    if balance < parsed_amount:
+        await interaction.response.send_message(f"❌ You need **{parsed_amount - balance:,}** more tokens to start this giveaway!", ephemeral=True)
         return
     
     # Deduct tokens from user
-    new_balance = update_balance(interaction.user.id, -amount)
-    giveaway_daily_totals[user_id][today] += amount
+    new_balance = update_balance(interaction.user.id, -parsed_amount)
+    giveaway_daily_totals[user_id][today] += parsed_amount
     set_short_cooldown(interaction.user.id, "giveaway")  # Set 3 minute cooldown
     
     # Create giveaway
     giveaway_id = f"{interaction.user.id}_{int(time.time())}"
-    prize_per_winner = amount // winners
+    prize_per_winner = parsed_amount // winners
     
     active_giveaways[giveaway_id] = {
         'creator': interaction.user.id,
-        'amount': amount,
+        'amount': parsed_amount,
         'winners': winners,
         'prize_per_winner': prize_per_winner,
         'entries': {},
@@ -2055,7 +2360,7 @@ async def giveaway(interaction: discord.Interaction, amount: int, winners: int):
     # Main prize info
     embed.add_field(
         name="🏆 TOTAL PRIZE", 
-        value=f"**{amount:,}** 🪙", 
+        value=f"**{parsed_amount:,}** 🪙", 
         inline=True
     )
     embed.add_field(
@@ -2119,7 +2424,7 @@ async def giveaway(interaction: discord.Interaction, amount: int, winners: int):
             )
             
             updated_embed.set_thumbnail(url="https://cdn.discordapp.com/emojis/1125274830004781156.webp?size=96&quality=lossless")
-            updated_embed.add_field(name="🏆 TOTAL PRIZE", value=f"**{amount:,}** 🪙", inline=True)
+            updated_embed.add_field(name="🏆 TOTAL PRIZE", value=f"**{parsed_amount:,}** 🪙", inline=True)
             updated_embed.add_field(name="👑 WINNERS", value=f"**{winners}** lucky winners", inline=True)
             updated_embed.add_field(name="💰 PRIZE PER WINNER", value=f"**{prize_per_winner:,}** 🪙", inline=True)
             updated_embed.add_field(name="⏰ TIME REMAINING", value=f"**{time_left} seconds**", inline=True)
@@ -2326,7 +2631,8 @@ async def about(ctx):
             "`/gift <user> <amount>` - Gift tokens to another user\n"
             "`/giveaway <amount> <winners>` - Start a token giveaway\n"
             "`/giveawayinfo` - Check your daily limits\n"
-            "`/mines <amount> <mines>` - Play mines game (find gems to multiply your bet!)"
+            "`/mines <amount> <mines>` - Play mines game (find gems to multiply your bet!)\n"
+            "`/invitespanel` - View invite rewards and manage invites"
         ),
         inline=False
     )
@@ -2398,9 +2704,9 @@ async def about(ctx):
             "• 1-12 winners\n"
             "• 25 second duration\n"
             "• Special roles get bonus entries:\n"
-            "  - <@&1410911675351306250>: +7 entries\n"
-            "  - <@&1410911675351306251>: +5 entries\n"
-            "  - <@&1410911675351306252>: +3 entries"
+            "  - <@&1410917252190179369>: +7 entries\n"
+            "  - <@&1410917163933503521>: +5 entries\n"
+            "  - <@&1410917146459897928>: +3 entries"
         ),
         inline=False
     )
@@ -2430,6 +2736,43 @@ async def about(ctx):
         inline=False
     )
     
+    # Invite System
+    embed.add_field(
+        name="🔗 Invite Rewards",
+        value=(
+            "• Earn **300 tokens** for each valid invite\n"
+            "• Invited accounts must be **30+ days old**\n"
+            "• Use `/invitespanel` to manage your invites\n"
+            "• Generate personal invite links\n"
+            "• Track your invite statistics"
+        ),
+        inline=False
+    )
+    
+    # Anti-Spam System
+    embed.add_field(
+        name="⚠️ Anti-Spam System",
+        value=(
+            "• Sending messages too quickly will deduct **50 tokens**\n"
+            "• Avoid sending more than 5 messages in 10 seconds\n"
+            "• System helps maintain healthy chat environment"
+        ),
+        inline=False
+    )
+    
+    # Amount Formatting
+    embed.add_field(
+        name="💡 Amount Formatting",
+        value=(
+            "You can use suffixes for large amounts:\n"
+            "• **1k** = 1,000 tokens\n"
+            "• **1m** = 1,000,000 tokens\n"
+            "• **1b** = 1,000,000,000 tokens\n"
+            "• Works in all commands that accept amounts!"
+        ),
+        inline=False
+    )
+    
     # Tips
     embed.add_field(
         name="💡 Tips",
@@ -2440,7 +2783,9 @@ async def about(ctx):
             "• Chat regularly to earn passive tokens\n"
             "• Check `/leaderboard` to see your ranking\n"
             "• Host giveaways to share your wealth!\n"
-            "• Try the mines game for high-risk, high-reward gameplay"
+            "• Try the mines game for high-risk, high-reward gameplay\n"
+            "• Invite friends to earn bonus tokens\n"
+            "• Use amount suffixes (k, m, b) for convenience"
         ),
         inline=False
     )
