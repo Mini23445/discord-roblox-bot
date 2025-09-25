@@ -1137,6 +1137,8 @@ class MinesView(discord.ui.View):
         # Save data asynchronously
         await save_data()
         
+        await interaction.response.send_message("✅ You cashed out!", ephemeral=True)
+        
         # Reveal all mines and disable all buttons
         for child in self.view.children:
             if isinstance(child, MinesButton):
