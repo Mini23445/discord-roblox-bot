@@ -1020,12 +1020,13 @@ class MinesButton(discord.ui.Button):
         self.is_mine = is_mine
         
         if revealed:
-            if is_mine:
-                super().__init__(style=discord.ButtonStyle.danger, label="💣", disabled=True, row=position // 5)
-            else:
-                super().__init__(style=discord.ButtonStyle.success, label="💎", disabled=True, row=position // 5)
-        else:
-            super().__init__(style=discord.ButtonStyle.secondary, label="⬜", row=position // 5)
+    if is_mine:
+        super().__init__(style=discord.ButtonStyle.danger, label="💣", disabled=True, row=min(position // 5, 4))
+    else:
+        super().__init__(style=discord.ButtonStyle.success, label="💎", disabled=True, row=min(position // 5, 4))
+else:
+    row = min(position // 5, 4)  # This ensures row never exceeds 4
+    super().__init__(style=discord.ButtonStyle.secondary, label="⬜", row=row)
     
     async def callback(self, interaction: discord.Interaction):
         # Get the game data
