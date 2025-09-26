@@ -258,9 +258,6 @@ async def load_data():
         else:
             print("ℹ️ No anti-spam data file found, starting fresh")
             user_message_times = {}
-else:
-    message_count = 0
-    print("ℹ️ No message count file found, starting from 0")
             
     except Exception as e:
         print(f"⚠️ Error loading data: {e}")
