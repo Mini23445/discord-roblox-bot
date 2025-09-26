@@ -259,6 +259,17 @@ async def load_data():
             print("ℹ️ No anti-spam data file found, starting fresh")
             user_message_times = {}
             
+         # Load message count
+         if os.path.exists('message_count.json'):
+             async with aiofiles.open('message_count.json', 'r') as f:
+                  contents = await f.read()
+                  data = json.loads(contents)
+                  message_count = data.get('count', 0)
+                  print(f"✅ Loaded message count: {message_count}")
+else:
+    message_count = 0
+    print("ℹ️ No message count file found, starting from 0")
+            
     except Exception as e:
         print(f"⚠️ Error loading data: {e}")
         # Initialize empty data structures if loading fails
@@ -333,23 +344,7 @@ async def save_data():
         # Save anti-spam data
         async with aiofiles.open(ANTISPAM_DATA_FILE, 'w') as f:
             await f.write(json.dumps(user_message_times, indent=2))
-        # Load message count
-        if os.path.exists('message_count.json'):
-        async with aiofiles.open('message_count.json', 'r') as f:
-        contents = await f.read()
-        data = json.loads(contents)
-        message_count = data.get('count', 0)
-        print(f"✅ Loaded message count: {message_count}")
-else:
-    message_count = 0
-    print("ℹ️ No message count file found, starting from 0")
-            
-        print("💾 Data saved successfully")
-        return True
-    except Exception as e:
-        print(f"⚠️ Error saving data: {e}")
-        return False
-
+        
 async def force_save_on_exit():
     """Force save data when bot shuts down"""
     print("🔄 Bot shutting down, saving data...")
