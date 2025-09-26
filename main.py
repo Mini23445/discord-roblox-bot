@@ -62,7 +62,6 @@ giveaway_daily_totals = {}  # Track daily giveaway amounts
 active_mines_games = {}  # Track active mines games
 invite_data = {}  # Track invites: {inviter_id: {invited_users: [], total_invites: 0, tokens_earned: 0}}
 user_message_times = {}  # Anti-spam tracking: {user_id: [timestamp1, timestamp2, ...]}
-last_message_author = None
 
 # Data file paths
 USER_DATA_FILE = 'user_data.json'
@@ -432,6 +431,10 @@ def format_time(next_use):
     except:
         return "soon"
 
+def is_admin(user):
+    """Check if user is admin"""
+    return any(role.id == ADMIN_ROLE_ID for role in user.roles)
+
 def check_spam(user_id):
     """Check if user is spamming and deduct tokens if they are"""
     current_time = time.time()
@@ -446,23 +449,21 @@ def check_spam(user_id):
     # Add current timestamp
     user_message_times[user_id_str].append(current_time)
     
-    # Check if user has sent 5 consecutive messages (without others in between)
-    if len(user_message_times[user_id_str]) >= 5:
-        # Check if all 5 messages were within a short timeframe (like 30 seconds)
-        if current_time - user_message_times[user_id_str][0] <= 20:
-            # Deduct 50 tokens for spamming
-            balance_before = get_user_balance(user_id)
-            if balance_before >= 50:
-                new_balance = update_balance(user_id, -50)
-                asyncio.create_task(save_data())
-                
-                # Clear the message times to prevent multiple deductions
-                user_message_times[user_id_str] = []
-                
-                return True, balance_before, new_balance
+    # Check if user has sent more than 5 messages in 10 seconds
+    if len(user_message_times[user_id_str]) > 5:
+        # Deduct 50 tokens for spamming
+        balance_before = get_user_balance(user_id)
+        if balance_before >= 50:
+            new_balance = update_balance(user_id, -50)
+            asyncio.create_task(save_data())
+            
+            # Clear the message times to prevent multiple deductions
+            user_message_times[user_id_str] = []
+            
+            return True, balance_before, new_balance
     
-    return False, 0, 0  
-    
+    return False, 0, 0
+
 # Auto-save task
 async def auto_save():
     """Auto save every 30 seconds"""
