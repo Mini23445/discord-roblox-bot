@@ -258,14 +258,6 @@ async def load_data():
         else:
             print("ℹ️ No anti-spam data file found, starting fresh")
             user_message_times = {}
-            
-         # Load message count
-         if os.path.exists('message_count.json'):
-             async with aiofiles.open('message_count.json', 'r') as f:
-                  contents = await f.read()
-                  data = json.loads(contents)
-                  message_count = data.get('count', 0)
-                  print(f"✅ Loaded message count: {message_count}")
 else:
     message_count = 0
     print("ℹ️ No message count file found, starting from 0")
