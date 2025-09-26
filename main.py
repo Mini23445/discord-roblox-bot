@@ -1,3 +1,4 @@
+
 import discord
 from discord.ext import commands
 import json
@@ -61,58 +62,7 @@ giveaway_daily_totals = {}  # Track daily giveaway amounts
 active_mines_games = {}  # Track active mines games
 invite_data = {}  # Track invites: {inviter_id: {invited_users: [], total_invites: 0, tokens_earned: 0}}
 user_message_times = {}  # Anti-spam tracking: {user_id: [timestamp1, timestamp2, ...]}
-
-message_count = 0
-active_minigame = None
-minigame_answer = None
-minigame_channel_id = 1405523340252282972  # Your specified channel
-
-# Mini game data
-TRIVIA_QUESTIONS = [
-    {"question": "What is the capital of France?", "answer": "paris"},
-    {"question": "What planet is known as the Red Planet?", "answer": "mars"},
-    {"question": "How many sides does a triangle have?", "answer": "3"},
-    {"question": "What is the largest mammal in the world?", "answer": "blue whale"},
-    {"question": "What year did the Titanic sink?", "answer": "1912"},
-    {"question": "What is the chemical symbol for gold?", "answer": "au"},
-    {"question": "How many continents are there?", "answer": "7"},
-    {"question": "What is the smallest country in the world?", "answer": "vatican city"},
-    {"question": "What gas do plants absorb from the atmosphere?", "answer": "carbon dioxide"},
-    {"question": "What is the hardest natural substance on Earth?", "answer": "diamond"},
-    {"question": "In which ocean is the Bermuda Triangle located?", "answer": "atlantic"},
-    {"question": "What is the fastest land animal?", "answer": "cheetah"},
-    {"question": "How many hearts does an octopus have?", "answer": "3"},
-    {"question": "What is the largest organ in the human body?", "answer": "skin"},
-    {"question": "What currency is used in Japan?", "answer": "yen"},
-    {"question": "What is the tallest mountain in the world?", "answer": "mount everest"},
-    {"question": "How many bones are in an adult human body?", "answer": "206"},
-    {"question": "What is the main ingredient in guacamole?", "answer": "avocado"},
-    {"question": "What does WWW stand for?", "answer": "world wide web"},
-    {"question": "What is the largest desert in the world?", "answer": "sahara"}
-]
-
-SCRAMBLED_WORDS = [
-    {"word": "COMPUTER", "answer": "computer"},
-    {"word": "RAINBOW", "answer": "rainbow"},
-    {"word": "ELEPHANT", "answer": "elephant"},
-    {"word": "PYTHON", "answer": "python"},
-    {"word": "DISCORD", "answer": "discord"},
-    {"word": "GAMING", "answer": "gaming"},
-    {"word": "TREASURE", "answer": "treasure"},
-    {"word": "ADVENTURE", "answer": "adventure"},
-    {"word": "MYSTERY", "answer": "mystery"},
-    {"word": "CHALLENGE", "answer": "challenge"},
-    {"word": "VICTORY", "answer": "victory"},
-    {"word": "SURPRISE", "answer": "surprise"},
-    {"word": "FANTASTIC", "answer": "fantastic"},
-    {"word": "BRILLIANT", "answer": "brilliant"},
-    {"word": "CHAMPION", "answer": "champion"},
-    {"word": "DIAMOND", "answer": "diamond"},
-    {"word": "ENERGY", "answer": "energy"},
-    {"word": "FREEDOM", "answer": "freedom"},
-    {"word": "HARMONY", "answer": "harmony"},
-    {"word": "JOURNEY", "answer": "journey"}
-]
+last_message_author = None
 
 # Data file paths
 USER_DATA_FILE = 'user_data.json'
@@ -333,7 +283,13 @@ async def save_data():
         # Save anti-spam data
         async with aiofiles.open(ANTISPAM_DATA_FILE, 'w') as f:
             await f.write(json.dumps(user_message_times, indent=2))
-        
+            
+        print("💾 Data saved successfully")
+        return True
+    except Exception as e:
+        print(f"⚠️ Error saving data: {e}")
+        return False
+
 async def force_save_on_exit():
     """Force save data when bot shuts down"""
     print("🔄 Bot shutting down, saving data...")
@@ -476,10 +432,6 @@ def format_time(next_use):
     except:
         return "soon"
 
-def is_admin(user):
-    """Check if user is admin"""
-    return any(role.id == ADMIN_ROLE_ID for role in user.roles)
-
 def check_spam(user_id):
     """Check if user is spamming and deduct tokens if they are"""
     current_time = time.time()
@@ -494,176 +446,23 @@ def check_spam(user_id):
     # Add current timestamp
     user_message_times[user_id_str].append(current_time)
     
-    # Check if user has sent more than 5 messages in 10 seconds
-    if len(user_message_times[user_id_str]) > 5:
-        # Deduct 50 tokens for spamming
-        balance_before = get_user_balance(user_id)
-        if balance_before >= 50:
-            new_balance = update_balance(user_id, -50)
-            asyncio.create_task(save_data())
-            
-            # Clear the message times to prevent multiple deductions
-            user_message_times[user_id_str] = []
-            
-            return True, balance_before, new_balance
-    
-    return False, 0, 0
-def scramble_word(word):
-    """Scramble the letters in a word"""
-    import random
-    letters = list(word)
-    random.shuffle(letters)
-    return ''.join(letters)
-
-async def start_minigame():
-    """Start a random minigame"""
-    global active_minigame, minigame_answer
-    
-    try:
-        channel = bot.get_channel(minigame_channel_id)
-        if not channel:
-            print(f"⚠️ Mini game channel {minigame_channel_id} not found!")
-            return
-        
-        game_type = random.choice(['number', 'unscramble', 'trivia'])
-        
-        if game_type == 'number':
-            # Number guessing game
-            number = random.randint(1, 10)
-            minigame_answer = str(number)
-            active_minigame = 'number'
-            
-            embed = discord.Embed(
-                title="🎲 **MINI GAME ALERT!** 🎲",
-                description="**Guess the Number Challenge!**",
-                color=0xFF6B35,
-                timestamp=datetime.now()
-            )
-            embed.add_field(
-                name="🎯 **Challenge**", 
-                value="I'm thinking of a number between **1** and **10**!\nFirst person to guess correctly wins **250 🪙**!", 
-                inline=False
-            )
-            embed.add_field(name="💰 **Prize**", value="**250 🪙**", inline=True)
-            embed.add_field(name="⏰ **Time Limit**", value="**30 seconds**", inline=True)
-            embed.add_field(name="🎮 **How to Play**", value="Just type your number (1-10)!", inline=True)
-            embed.set_footer(text="Good luck! 🍀")
-            embed.set_thumbnail(url="https://cdn.discordapp.com/emojis/1125274830004781156.webp?size=96&quality=lossless")
-            
-        elif game_type == 'unscramble':
-            # Word unscrambling game
-            word_data = random.choice(SCRAMBLED_WORDS)
-            original_word = word_data['word']
-            scrambled = scramble_word(original_word)
-            
-            # Make sure scrambled word is different from original
-            attempts = 0
-            while scrambled == original_word and attempts < 10:
-                scrambled = scramble_word(original_word)
-                attempts += 1
+    # Check if user has sent 5 consecutive messages (without others in between)
+    if len(user_message_times[user_id_str]) >= 5:
+        # Check if all 5 messages were within a short timeframe (like 30 seconds)
+        if current_time - user_message_times[user_id_str][0] <= 20:
+            # Deduct 50 tokens for spamming
+            balance_before = get_user_balance(user_id)
+            if balance_before >= 50:
+                new_balance = update_balance(user_id, -50)
+                asyncio.create_task(save_data())
                 
-            minigame_answer = word_data['answer']
-            active_minigame = 'unscramble'
-            
-            embed = discord.Embed(
-                title="🔤 **MINI GAME ALERT!** 🔤",
-                description="**Unscramble the Word Challenge!**",
-                color=0x4ECDC4,
-                timestamp=datetime.now()
-            )
-            embed.add_field(
-                name="🧩 **Challenge**", 
-                value=f"Unscramble this word: **`{scrambled}`**\nFirst person to solve it wins **250 🪙**!", 
-                inline=False
-            )
-            embed.add_field(name="💰 **Prize**", value="**250 🪙**", inline=True)
-            embed.add_field(name="⏰ **Time Limit**", value="**30 seconds**", inline=True)
-            embed.add_field(name="🎮 **How to Play**", value="Type the unscrambled word!", inline=True)
-            embed.set_footer(text="Think carefully! 🧠")
-            embed.set_thumbnail(url="https://cdn.discordapp.com/emojis/1125272129399365632.webp?size=96&quality=lossless")
-            
-        elif game_type == 'trivia':
-            # Trivia question game
-            trivia_data = random.choice(TRIVIA_QUESTIONS)
-            minigame_answer = trivia_data['answer']
-            active_minigame = 'trivia'
-            
-            embed = discord.Embed(
-                title="🧠 **MINI GAME ALERT!** 🧠",
-                description="**Trivia Challenge!**",
-                color=0x9B59B6,
-                timestamp=datetime.now()
-            )
-            embed.add_field(
-                name="❓ **Question**", 
-                value=f"**{trivia_data['question']}**\nFirst person to answer correctly wins **250 🪙**!", 
-                inline=False
-            )
-            embed.add_field(name="💰 **Prize**", value="**250 🪙**", inline=True)
-            embed.add_field(name="⏰ **Time Limit**", value="**30 seconds**", inline=True)
-            embed.add_field(name="🎮 **How to Play**", value="Type your answer!", inline=True)
-            embed.set_footer(text="Knowledge is power! 📚")
-            embed.set_thumbnail(url="https://cdn.discordapp.com/emojis/1125272129399365632.webp?size=96&quality=lossless")
-        
-        await channel.send(embed=embed)
-        
-        # Set a timer to end the minigame after 30 seconds
-        asyncio.create_task(end_minigame_timer())
-        
-    except Exception as e:
-        print(f"⚠️ Error starting minigame: {e}")
-
-async def end_minigame_timer():
-    """End the minigame after 30 seconds if no one wins"""
-    await asyncio.sleep(30)
+                # Clear the message times to prevent multiple deductions
+                user_message_times[user_id_str] = []
+                
+                return True, balance_before, new_balance
     
-    global active_minigame, minigame_answer
+    return False, 0, 0  
     
-    if active_minigame:  # If minigame is still active (no one won)
-        try:
-            channel = bot.get_channel(minigame_channel_id)
-            if channel:
-                # Create a nice looking "no winner" embed
-                embed = discord.Embed(
-                    title="⏰ **TIME'S UP!** ⏰",
-                    description="**Nobody won this round!**",
-                    color=0xFF4444,
-                    timestamp=datetime.now()
-                )
-                
-                if active_minigame == 'number':
-                    embed.add_field(
-                        name="🎯 **The Answer Was**", 
-                        value=f"**{minigame_answer}**", 
-                        inline=True
-                    )
-                    embed.add_field(name="🎲 **Game Type**", value="Number Guess", inline=True)
-                elif active_minigame == 'unscramble':
-                    embed.add_field(
-                        name="🔤 **The Answer Was**", 
-                        value=f"**{minigame_answer.upper()}**", 
-                        inline=True
-                    )
-                    embed.add_field(name="🧩 **Game Type**", value="Word Unscramble", inline=True)
-                elif active_minigame == 'trivia':
-                    embed.add_field(
-                        name="🧠 **The Answer Was**", 
-                        value=f"**{minigame_answer.title()}**", 
-                        inline=True
-                    )
-                    embed.add_field(name="❓ **Game Type**", value="Trivia Question", inline=True)
-                
-                embed.add_field(name="💰 **Missed Prize**", value="**250 🪙**", inline=True)
-                embed.add_field(name="📈 **Next Game**", value="Keep chatting for the next mini game!", inline=False)
-                embed.set_footer(text="Better luck next time! 🍀")
-                
-                await channel.send(embed=embed)
-        except Exception as e:
-            print(f"⚠️ Error ending minigame: {e}")
-        
-        # Reset minigame state
-        active_minigame = None
-        minigame_answer = None
 # Auto-save task
 async def auto_save():
     """Auto save every 30 seconds"""
