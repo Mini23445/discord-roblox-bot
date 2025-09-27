@@ -718,10 +718,13 @@ async def on_ready():
     bot.minigame_task = asyncio.create_task(start_minigame())
     
     try:
-        # Hide admin commands from regular users
-        for command in bot.tree.get_commands():
-            if command.name in ['addtoken', 'removetoken', 'adminbalance', 'addshop', 'resetdata', 'config_cf', 'config_mines', 'getroblox', 'setroblox', 'invitespanel']:
-                command.add_check(lambda interaction: is_admin(interaction.user))
+        # Hide admin commands from regular users using proper checks
+        @bot.tree.error
+        async def on_app_command_error(interaction: discord.Interaction, error):
+            if isinstance(error, discord.app_commands.CheckFailure):
+                await interaction.response.send_message("❌ You don't have permission to use this command!", ephemeral=True)
+            else:
+                print(f"Command error: {error}")
         
         synced = await bot.tree.sync()
         print(f"✅ Synced {len(synced)} commands")
@@ -1455,17 +1458,18 @@ async def buy(interaction: discord.Interaction, item_name: str, quantity: int = 
 
 # ===== ADMIN COMMANDS =====
 
+def admin_check(interaction: discord.Interaction) -> bool:
+    """Check if user is admin"""
+    return is_admin(interaction.user)
+
 # Shop management modals and views
-class AddItemModal(discord.ui.Modal):
-    def __init__(self):
-        super().__init__(title="Add Shop Item")
-    
+class AddItemModal(discord.ui.Modal, title="Add Shop Item"):
     name = discord.ui.TextInput(label="Item Name")
     price = discord.ui.TextInput(label="Price (supports k, m, b suffixes)")
     description = discord.ui.TextInput(label="Description", required=False, style=discord.TextStyle.long)
     
     async def on_submit(self, interaction: discord.Interaction):
-        if not is_admin(interaction.user):
+        if not admin_check(interaction):
             await interaction.response.send_message("❌ Admin only!", ephemeral=True)
             return
             
@@ -1510,17 +1514,14 @@ class AddItemModal(discord.ui.Modal):
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-class UpdateItemModal(discord.ui.Modal):
-    def __init__(self):
-        super().__init__(title="Update Shop Item")
-    
+class UpdateItemModal(discord.ui.Modal, title="Update Shop Item"):
     item_number = discord.ui.TextInput(label="Item Number", placeholder="Enter number (1, 2, 3...)")
     name = discord.ui.TextInput(label="New Name (optional)", required=False)
     price = discord.ui.TextInput(label="New Price (optional, supports k, m, b)", required=False)
     description = discord.ui.TextInput(label="New Description (optional)", required=False, style=discord.TextStyle.long)
     
     async def on_submit(self, interaction: discord.Interaction):
-        if not is_admin(interaction.user):
+        if not admin_check(interaction):
             await interaction.response.send_message("❌ Admin only!", ephemeral=True)
             return
             
@@ -1574,15 +1575,12 @@ class UpdateItemModal(discord.ui.Modal):
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-class DeleteItemModal(discord.ui.Modal):
-    def __init__(self):
-        super().__init__(title="Delete Shop Item")
-    
+class DeleteItemModal(discord.ui.Modal, title="Delete Shop Item"):
     item_number = discord.ui.TextInput(label="Item Number", placeholder="Enter number (1, 2, 3...)")
     confirmation = discord.ui.TextInput(label="Type 'DELETE' to confirm", placeholder="This cannot be undone!")
     
     async def on_submit(self, interaction: discord.Interaction):
-        if not is_admin(interaction.user):
+        if not admin_check(interaction):
             await interaction.response.send_message("❌ Admin only!", ephemeral=True)
             return
             
@@ -1628,14 +1626,14 @@ class ShopManageView(discord.ui.View):
     
     @discord.ui.button(label="➕ Add Item", style=discord.ButtonStyle.green)
     async def add_item(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not is_admin(interaction.user):
+        if not admin_check(interaction):
             await interaction.response.send_message("❌ Admin only!", ephemeral=True)
             return
         await interaction.response.send_modal(AddItemModal())
     
     @discord.ui.button(label="✏️ Update Item", style=discord.ButtonStyle.blurple)
     async def update_item(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not is_admin(interaction.user):
+        if not admin_check(interaction):
             await interaction.response.send_message("❌ Admin only!", ephemeral=True)
             return
         
@@ -1647,7 +1645,7 @@ class ShopManageView(discord.ui.View):
     
     @discord.ui.button(label="🗑️ Delete Item", style=discord.ButtonStyle.red)
     async def delete_item(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not is_admin(interaction.user):
+        if not admin_check(interaction):
             await interaction.response.send_message("❌ Admin only!", ephemeral=True)
             return
         
@@ -1658,11 +1656,8 @@ class ShopManageView(discord.ui.View):
         await interaction.response.send_modal(DeleteItemModal())
 
 @bot.tree.command(name="addshop", description="Manage shop (Admin only)")
+@discord.app_commands.check(admin_check)
 async def addshop(interaction: discord.Interaction):
-    if not is_admin(interaction.user):
-        await interaction.response.send_message("❌ Admin only!", ephemeral=True)
-        return
-    
     embed = discord.Embed(title="🛍️ Shop Management", color=0xff9900)
     embed.add_field(name="📊 Stats", value=f"**Items:** {len(shop_data)}\n**Status:** {'Active' if shop_data else 'Empty'}", inline=True)
     
@@ -1753,11 +1748,8 @@ class ResetConfirmView(discord.ui.View):
         await interaction.response.edit_message(embed=cancel_embed, view=None)
 
 @bot.tree.command(name="resetdata", description="Reset all user data (Admin only)")
+@discord.app_commands.check(admin_check)
 async def resetdata(interaction: discord.Interaction, confirmation_code: str):
-    if not is_admin(interaction.user):
-        await interaction.response.send_message("❌ Admin only!", ephemeral=True)
-        return
-    
     if confirmation_code != "BgH7459njrYEy7":
         await interaction.response.send_message("❌ Invalid confirmation code!", ephemeral=True)
         return
@@ -1870,11 +1862,8 @@ async def leaderboard(interaction: discord.Interaction, page: int = 1):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="adminbalance", description="Check user balance (Admin only)")
+@discord.app_commands.check(admin_check)
 async def adminbalance(interaction: discord.Interaction, user: discord.Member):
-    if not is_admin(interaction.user):
-        await interaction.response.send_message("❌ Admin only!", ephemeral=True)
-        return
-    
     user_id = str(user.id)
     balance = get_user_balance(user.id)
     data = user_data.get(user_id, {})
@@ -1892,11 +1881,8 @@ async def adminbalance(interaction: discord.Interaction, user: discord.Member):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="addtoken", description="Add tokens (Admin only)")
+@discord.app_commands.check(admin_check)
 async def addtoken(interaction: discord.Interaction, user: discord.Member, amount: str):
-    if not is_admin(interaction.user):
-        await interaction.response.send_message("❌ Admin only!", ephemeral=True)
-        return
-    
     # Parse amount with suffixes
     parsed_amount = parse_amount(amount)
     if parsed_amount is None or parsed_amount <= 0:
@@ -1927,11 +1913,8 @@ async def addtoken(interaction: discord.Interaction, user: discord.Member, amoun
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="removetoken", description="Remove tokens from a user (Admin only)")
+@discord.app_commands.check(admin_check)
 async def removetoken(interaction: discord.Interaction, user: discord.Member, amount: str):
-    if not is_admin(interaction.user):
-        await interaction.response.send_message("❌ Admin only!", ephemeral=True)
-        return
-    
     # Parse amount with suffixes
     parsed_amount = parse_amount(amount)
     if parsed_amount is None or parsed_amount <= 0:
@@ -2212,10 +2195,7 @@ async def mines(interaction: discord.Interaction, amount: str, mines_count: int)
 # ===== MINES CONFIGURATION =====
 
 # Mines configuration modal
-class MinesConfigModal(discord.ui.Modal):
-    def __init__(self):
-        super().__init__(title="Mines Configuration")
-    
+class MinesConfigModal(discord.ui.Modal, title="Mines Configuration"):
     min_mines = discord.ui.TextInput(
         label="Minimum Mines",
         placeholder=f"Current: {mines_config['min_mines']}",
@@ -2249,7 +2229,7 @@ class MinesConfigModal(discord.ui.Modal):
     )
     
     async def on_submit(self, interaction: discord.Interaction):
-        if not is_admin(interaction.user):
+        if not admin_check(interaction):
             await interaction.response.send_message("❌ Admin only!", ephemeral=True)
             return
         
@@ -2307,11 +2287,8 @@ class MinesConfigModal(discord.ui.Modal):
         )
 
 @bot.tree.command(name="config_mines", description="Configure mines game settings (Admin only)")
+@discord.app_commands.check(admin_check)
 async def config_mines(interaction: discord.Interaction):
-    if not is_admin(interaction.user):
-        await interaction.response.send_message("❌ Admin only!", ephemeral=True)
-        return
-    
     await interaction.response.send_modal(MinesConfigModal())
 
 # ===== ROBLOX COMMANDS =====
@@ -2347,11 +2324,8 @@ async def roblox(interaction: discord.Interaction, username: str):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="getroblox", description="Get a user's Roblox username (Admin only)")
+@discord.app_commands.check(admin_check)
 async def getroblox(interaction: discord.Interaction, user: discord.Member):
-    if not is_admin(interaction.user):
-        await interaction.response.send_message("❌ Admin only!", ephemeral=True)
-        return
-    
     username = roblox_data.get(str(user.id), "Not set")
     
     embed = discord.Embed(
@@ -2365,11 +2339,8 @@ async def getroblox(interaction: discord.Interaction, user: discord.Member):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="setroblox", description="Set a user's Roblox username (Admin only)")
+@discord.app_commands.check(admin_check)
 async def setroblox(interaction: discord.Interaction, user: discord.Member, username: str):
-    if not is_admin(interaction.user):
-        await interaction.response.send_message("❌ Admin only!", ephemeral=True)
-        return
-    
     # Validate username
     if len(username) < 3 or len(username) > 20:
         await interaction.response.send_message("❌ Roblox username must be between 3-20 characters!", ephemeral=True)
@@ -2408,10 +2379,7 @@ async def setroblox(interaction: discord.Interaction, user: discord.Member, user
 # ===== COINFLIP CONFIGURATION =====
 
 # Coinflip configuration modal
-class CoinflipConfigModal(discord.ui.Modal):
-    def __init__(self):
-        super().__init__(title="Coinflip Configuration")
-    
+class CoinflipConfigModal(discord.ui.Modal, title="Coinflip Configuration"):
     win_chance = discord.ui.TextInput(
         label="Win Chance (%)",
         placeholder="Enter a number between 1-100",
@@ -2429,7 +2397,7 @@ class CoinflipConfigModal(discord.ui.Modal):
     )
     
     async def on_submit(self, interaction: discord.Interaction):
-        if not is_admin(interaction.user):
+        if not admin_check(interaction):
             await interaction.response.send_message("❌ Admin only!", ephemeral=True)
             return
         
@@ -2477,11 +2445,8 @@ class CoinflipConfigModal(discord.ui.Modal):
         )
 
 @bot.tree.command(name="config_cf", description="Configure coinflip settings (Admin only)")
+@discord.app_commands.check(admin_check)
 async def config_cf(interaction: discord.Interaction):
-    if not is_admin(interaction.user):
-        await interaction.response.send_message("❌ Admin only!", ephemeral=True)
-        return
-    
     await interaction.response.send_modal(CoinflipConfigModal())
 
 # ===== INVITES PANEL =====
@@ -2575,12 +2540,9 @@ class InvitePanelView(discord.ui.View):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="invitespanel", description="View invite rewards information and manage your invites (Admin only)")
+@discord.app_commands.check(admin_check)
 async def invitespanel(interaction: discord.Interaction):
     """Display the invite rewards panel (Admin only)"""
-    if not is_admin(interaction.user):
-        await interaction.response.send_message("❌ Admin only!", ephemeral=True)
-        return
-    
     embed = discord.Embed(
         title="🎉 Invite Rewards System",
         description="Earn tokens by inviting friends to the server!",
@@ -3051,7 +3013,10 @@ async def about(ctx):
                 "`/adminbalance <user>` - Check user's balance\n"
                 "`/addshop` - Manage shop items\n"
                 "`/resetdata <code>` - Reset all user data\n"
-                "`/config_cf` - Configure coinflip settings"
+                "`/config_cf` - Configure coinflip settings\n"
+                "`/config_mines` - Configure mines settings\n"
+                "`/getroblox <user>` - Get Roblox username\n"
+                "`/setroblox <user> <username>` - Set Roblox username"
             ),
             inline=False
         )
