@@ -669,7 +669,7 @@ async def start_minigame():
                 answer = word_data["answer"]
                 embed_title = "🔤 Word Scramble Minigame"
                 embed_description = f"**Unscramble this word: {scrambled}**\n\nFirst person to unscramble correctly wins 200 tokens!"
-            
+        def some_function(): 
             global active_minigame, minigame_message_count
             active_minigame = {
                 "type": minigame_type,
