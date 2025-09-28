@@ -24,10 +24,10 @@ intents.invites = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # Configuration
-ADMIN_ROLE_ID = 1405525451807522847
-LOG_CHANNEL_ID = 1405523454924685353
-PURCHASE_LOG_CHANNEL_ID = 1405523454924685353
-MINIGAME_CHANNEL_ID = 1405523340252282972  # Set this to your desired channel ID
+ADMIN_ROLE_ID = 1410911675351306250
+LOG_CHANNEL_ID = 1413818486404415590
+PURCHASE_LOG_CHANNEL_ID = 1413885597826813972
+MINIGAME_CHANNEL_ID = 1413818486404415590  # Set this to your desired channel ID
 
 # Coinflip configuration
 coinflip_config = {
@@ -89,7 +89,7 @@ PRIORITY_ROLES = {
 # Data storage
 user_data = {}
 shop_data = []
-cooldowns = {"daily": {}, "work": {}, "crime": {}, "gift": {}, "buy": {}, "coinflip": {}, "duel": {}, "giveaway": {}, "mines": {}, "roblox": {}}
+cooldowns = {"daily": {}, "work": {}, "crime": {}, "gift": {}, "buy": {}, "coinflip": {}, "duel": {}, "giveaway": {}, "mines": {}, "roblox": {}, "doors": {}}
 pending_duels = {}
 active_giveaways = {}
 giveaway_daily_totals = {}  # Track daily giveaway amounts
@@ -98,6 +98,7 @@ invite_data = {}  # Track invites: {inviter_id: {invited_users: [], total_invite
 user_message_times = {}  # Anti-spam tracking: {user_id: [timestamp1, timestamp2, ...]}
 roblox_data = {}  # Store Roblox usernames: {user_id: roblox_username}
 active_minigame = None  # Track active minigame
+minigame_message_count = 0  # Track messages in minigame channel
 
 # Data file paths
 USER_DATA_FILE = 'user_data.json'
@@ -194,7 +195,7 @@ async def load_data():
                 print("✅ Loaded cooldown data")
         else:
             print("ℹ️ No cooldowns file found, starting fresh")
-            cooldowns = {"daily": {}, "work": {}, "crime": {}, "gift": {}, "buy": {}, "coinflip": {}, "duel": {}, "giveaway": {}, "mines": {}, "roblox": {}}
+            cooldowns = {"daily": {}, "work": {}, "crime": {}, "gift": {}, "buy": {}, "coinflip": {}, "duel": {}, "giveaway": {}, "mines": {}, "roblox": {}, "doors": {}}
         
         # Load active giveaways
         if os.path.exists(GIVEAWAYS_FILE):
@@ -271,7 +272,7 @@ async def load_data():
         # Initialize empty data structures if loading fails
         user_data = {}
         shop_data = []
-        cooldowns = {"daily": {}, "work": {}, "crime": {}, "gift": {}, "buy": {}, "coinflip": {}, "duel": {}, "giveaway": {}, "mines": {}, "roblox": {}}
+        cooldowns = {"daily": {}, "work": {}, "crime": {}, "gift": {}, "buy": {}, "coinflip": {}, "duel": {}, "giveaway": {}, "mines": {}, "roblox": {}, "doors": {}}
         active_giveaways = {}
         giveaway_daily_totals = {}
         coinflip_config = {"win_chance": 45, "max_bet": 1000}
@@ -400,7 +401,7 @@ async def log_action(action_type, title, description, color=0x0099ff, user=None,
     except Exception as e:
         print(f"⚠️ Error sending log: {e}")
 
-async def log_purchase(user, item_name, price, quantity=1):
+async def log_purchase(user, item_name, price, quantity=1, item_type="shop"):
     """Log purchase to purchase log channel"""
     try:
         purchase_channel = bot.get_channel(PURCHASE_LOG_CHANNEL_ID)
@@ -409,8 +410,8 @@ async def log_purchase(user, item_name, price, quantity=1):
             return
         
         embed = discord.Embed(
-            title="🛒 Purchase Made",
-            color=0x00ff00,
+            title="🛒 Purchase Made" if item_type == "shop" else "🎉 Reward Won",
+            color=0x00ff00 if item_type == "shop" else 0xFFD700,
             timestamp=datetime.now()
         )
         
@@ -419,6 +420,9 @@ async def log_purchase(user, item_name, price, quantity=1):
         embed.add_field(name="Quantity", value=str(quantity), inline=True)
         embed.add_field(name="Total Cost", value=f"{price * quantity:,} 🪙", inline=True)
         embed.add_field(name="Unit Price", value=f"{price:,} 🪙", inline=True)
+        
+        if item_type == "reward":
+            embed.add_field(name="Type", value="Chat Reward", inline=True)
         
         embed.set_author(name=user.display_name, icon_url=user.display_avatar.url)
         await purchase_channel.send(embed=embed)
@@ -532,6 +536,10 @@ def check_spam(user_id):
     
     return False, 0, 0
 
+def has_linked_roblox(user_id):
+    """Check if user has linked their Roblox account"""
+    return str(user_id) in roblox_data
+
 # Auto-save task
 async def auto_save():
     """Auto save every 30 seconds"""
@@ -632,76 +640,81 @@ async def cleanup_antispam_data():
 
 # Minigame system
 async def start_minigame():
-    """Start a minigame every 5 minutes in a specific channel"""
+    """Start a minigame every 75 messages in the minigame channel"""
     await bot.wait_until_ready()
     
     while not bot.is_closed():
-        await asyncio.sleep(300)  # 5 minutes
+        await asyncio.sleep(10)  # Check every 10 seconds
         
-        # Get the minigame channel
-        minigame_channel = bot.get_channel(MINIGAME_CHANNEL_ID)
-        if not minigame_channel:
-            print(f"⚠️ Minigame channel {MINIGAME_CHANNEL_ID} not found!")
-            continue
-        
-        # Choose a random minigame type
-        minigame_type = random.choice(["trivia", "scramble"])
-        
-        if minigame_type == "trivia":
-            question_data = random.choice(MINIGAME_QUESTIONS)
-            question = question_data["question"]
-            answer = question_data["answer"]
-            embed_title = "🎯 Trivia Minigame"
-            embed_description = f"**{question}**\n\nFirst person to answer correctly wins 200 tokens!"
-        else:  # scramble
-            word_data = random.choice(MINIGAME_SCRAMBLED_WORDS)
-            scrambled = word_data["scrambled"]
-            answer = word_data["answer"]
-            embed_title = "🔤 Word Scramble Minigame"
-            embed_description = f"**Unscramble this word: {scrambled}**\n\nFirst person to unscramble correctly wins 200 tokens!"
-        
-        global active_minigame
-        active_minigame = {
-            "type": minigame_type,
-            "question": question if minigame_type == "trivia" else scrambled,
-            "answer": answer.lower(),
-            "active": True,
-            "winner": None,
-            "channel_id": MINIGAME_CHANNEL_ID
-        }
-        
-        embed = discord.Embed(
-            title=embed_title,
-            description=embed_description,
-            color=0xFFD700,
-            timestamp=datetime.now()
-        )
-        embed.set_footer(text="Reply with your answer! Minigame ends in 60 seconds.")
-        
-        try:
-            await minigame_channel.send(embed=embed)
-        except Exception as e:
-            print(f"⚠️ Error sending minigame to channel: {e}")
-            continue
-        
-        # Wait 60 seconds for answers
-        await asyncio.sleep(60)
-        
-        if active_minigame and active_minigame["winner"] is None:
-            # No one answered correctly
-            active_minigame = None
+        # Check if we have enough messages
+        if minigame_message_count >= 75:
+            # Get the minigame channel
+            minigame_channel = bot.get_channel(MINIGAME_CHANNEL_ID)
+            if not minigame_channel:
+                print(f"⚠️ Minigame channel {MINIGAME_CHANNEL_ID} not found!")
+                continue
+            
+            # Choose a random minigame type
+            minigame_type = random.choice(["trivia", "scramble"])
+            
+            if minigame_type == "trivia":
+                question_data = random.choice(MINIGAME_QUESTIONS)
+                question = question_data["question"]
+                answer = question_data["answer"]
+                embed_title = "🎯 Trivia Minigame"
+                embed_description = f"**{question}**\n\nFirst person to answer correctly wins 200 tokens!"
+            else:  # scramble
+                word_data = random.choice(MINIGAME_SCRAMBLED_WORDS)
+                scrambled = word_data["scrambled"]
+                answer = word_data["answer"]
+                embed_title = "🔤 Word Scramble Minigame"
+                embed_description = f"**Unscramble this word: {scrambled}**\n\nFirst person to unscramble correctly wins 200 tokens!"
+            
+            global active_minigame, minigame_message_count
+            active_minigame = {
+                "type": minigame_type,
+                "question": question if minigame_type == "trivia" else scrambled,
+                "answer": answer.lower(),
+                "active": True,
+                "winner": None,
+                "channel_id": MINIGAME_CHANNEL_ID
+            }
+            
+            # Reset message count
+            minigame_message_count = 0
+            
             embed = discord.Embed(
-                title="⏰ Minigame Ended",
-                description="No one answered correctly in time!",
-                color=0xff4444
+                title=embed_title,
+                description=embed_description,
+                color=0xFFD700,
+                timestamp=datetime.now()
             )
-            embed.add_field(name="Correct Answer", value=answer.title(), inline=True)
-            embed.add_field(name="Prize", value="200 🪙 (unclaimed)", inline=True)
+            embed.set_footer(text="Reply with your answer! Minigame ends in 60 seconds.")
             
             try:
                 await minigame_channel.send(embed=embed)
             except Exception as e:
-                print(f"⚠️ Error sending minigame result: {e}")
+                print(f"⚠️ Error sending minigame to channel: {e}")
+                continue
+            
+            # Wait 60 seconds for answers
+            await asyncio.sleep(60)
+            
+            if active_minigame and active_minigame["winner"] is None:
+                # No one answered correctly
+                active_minigame = None
+                embed = discord.Embed(
+                    title="⏰ Minigame Ended",
+                    description="No one answered correctly in time!",
+                    color=0xff4444
+                )
+                embed.add_field(name="Correct Answer", value=answer.title(), inline=True)
+                embed.add_field(name="Prize", value="200 🪙 (unclaimed)", inline=True)
+                
+                try:
+                    await minigame_channel.send(embed=embed)
+                except Exception as e:
+                    print(f"⚠️ Error sending minigame result: {e}")
 
 @bot.event
 async def on_ready():
@@ -734,6 +747,21 @@ async def on_ready():
 @bot.event
 async def on_message(message):
     if not message.author.bot and message.guild:
+        # Check if user has linked Roblox account
+        if not has_linked_roblox(message.author.id):
+            # Only allow basic commands until Roblox is linked
+            if not message.content.startswith('!about') and not message.content.startswith('/roblox'):
+                try:
+                    embed = discord.Embed(
+                        title="🔗 Roblox Account Required",
+                        description="You need to link your Roblox account before using the bot!\n\nUse `/roblox <username>` to link your account.",
+                        color=0xff9900
+                    )
+                    await message.channel.send(embed=embed, delete_after=10)
+                except:
+                    pass
+                return
+        
         # Check for spam
         is_spam, old_balance, new_balance = check_spam(message.author.id)
         if is_spam:
@@ -755,6 +783,31 @@ async def on_message(message):
         # Award tokens for normal messages (if not spamming)
         tokens = random.randint(1, 5)
         update_balance(message.author.id, tokens)
+        
+        # Check if message is in minigame channel
+        if message.channel.id == MINIGAME_CHANNEL_ID:
+            global minigame_message_count
+            minigame_message_count += 1
+            
+            # 5% chance to win huge reward when chatting in minigame channel
+            if random.random() <= 0.05:  # 5% chance
+                huge_reward = random.randint(500, 2000)  # 500-2000 tokens
+                new_balance = update_balance(message.author.id, huge_reward)
+                await save_data()
+                
+                # Log the reward
+                await log_purchase(message.author, "Huge Chat Reward", huge_reward, 1, "reward")
+                
+                embed = discord.Embed(
+                    title="🎉 HUGE CHAT REWARD!",
+                    description=f"{message.author.mention} won **{huge_reward:,} tokens** just for chatting!",
+                    color=0xFFD700
+                )
+                embed.add_field(name="Reward", value=f"{huge_reward:,} 🪙", inline=True)
+                embed.add_field(name="New Balance", value=f"{new_balance:,} 🪙", inline=True)
+                embed.set_footer(text="Keep chatting for more rewards!")
+                
+                await message.channel.send(embed=embed)
         
         # Check minigame answer (only in minigame channel)
         if (active_minigame and 
@@ -790,6 +843,8 @@ async def on_member_join(member):
         # Check if the member's account is 30 days or older
         account_age = datetime.now().astimezone() - member.created_at
         if account_age.days < 30:
+            # Send DM to inviter about account being too new
+            await send_invite_dm(member, None, "Account too new", f"The account {member.display_name} is too new (less than 30 days old). No reward given.")
             print(f"❌ {member} joined but account is too new ({account_age.days} days)")
             return
         
@@ -798,6 +853,7 @@ async def on_member_join(member):
             invites = await member.guild.invites()
         except:
             print(f"⚠️ Could not get invites for guild {member.guild.name}")
+            await send_invite_dm(member, None, "Invite tracking error", "Could not track invites for this member.")
             return
         
         # Find which invite was used by comparing uses
@@ -811,6 +867,7 @@ async def on_member_join(member):
                 break
         
         if not used_invite or not used_invite.inviter or used_invite.inviter.bot:
+            await send_invite_dm(member, None, "No invite found", "Could not determine who invited this member.")
             return
         
         inviter_id = str(used_invite.inviter.id)
@@ -826,6 +883,7 @@ async def on_member_join(member):
         
         # Check if this user was already tracked
         if invited_id in invite_data[inviter_id]['invited_users']:
+            await send_invite_dm(used_invite.inviter, member, "Already tracked", "This member was already tracked.")
             return
         
         # Reward inviter with 300 tokens
@@ -839,32 +897,59 @@ async def on_member_join(member):
         
         await save_data()
         
-        # Send DM to inviter
-        try:
-            embed = discord.Embed(
-                title="🎉 Invite Reward!",
-                description=f"You invited {member.mention} and got 300 tokens!",
-                color=0x00ff00,
-                timestamp=datetime.now()
-            )
-            embed.add_field(name="Invited User", value=member.display_name, inline=True)
-            embed.add_field(name="Reward", value="300 🪙", inline=True)
-            embed.add_field(name="Total Invites", value=invite_data[inviter_id]['total_invites'], inline=True)
-            embed.set_footer(text="IM's Universe")
-            
-            await used_invite.inviter.send(embed=embed)
-        except:
-            print(f"⚠️ Could not DM {used_invite.inviter} about invite reward")
+        # Send success DM to inviter
+        await send_invite_dm(used_invite.inviter, member, "Reward given", "300 tokens")
         
         print(f"✅ {used_invite.inviter} rewarded 300 tokens for inviting {member}")
         
     except Exception as e:
         print(f"⚠️ Error processing member join: {e}")
+        # Send error DM if possible
+        try:
+            if 'used_invite' in locals() and used_invite and used_invite.inviter:
+                await send_invite_dm(used_invite.inviter, member, "Error", f"An error occurred: {str(e)}")
+        except:
+            pass
+
+async def send_invite_dm(inviter, member, status, message):
+    """Send DM to inviter about invite status"""
+    try:
+        embed = discord.Embed(
+            title="🔗 Invite Status",
+            color=0xFFFF00 if status != "Reward given" else 0x00ff00,
+            timestamp=datetime.now()
+        )
+        
+        if member:
+            embed.add_field(name="Invited User", value=member.display_name, inline=True)
+        
+        embed.add_field(name="Status", value=status, inline=True)
+        embed.add_field(name="Details", value=message, inline=False)
+        
+        if status == "Reward given":
+            embed.add_field(name="Reward", value="300 🪙", inline=True)
+            embed.add_field(name="Total Invites", value=invite_data.get(str(inviter.id), {}).get('total_invites', 0), inline=True)
+        
+        embed.set_footer(text="IM's Universe")
+        
+        await inviter.send(embed=embed)
+    except Exception as e:
+        print(f"⚠️ Could not DM {inviter} about invite: {e}")
 
 # ===== BASIC COMMANDS =====
 
 @bot.tree.command(name="balance", description="Check your token balance")
 async def balance(interaction: discord.Interaction):
+    # Check if user has linked Roblox account
+    if not has_linked_roblox(interaction.user.id):
+        embed = discord.Embed(
+            title="🔗 Roblox Account Required",
+            description="You need to link your Roblox account before using the bot!\n\nUse `/roblox <username>` to link your account.",
+            color=0xff9900
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+    
     user_id = str(interaction.user.id)
     balance = get_user_balance(interaction.user.id)
     data = user_data.get(user_id, {})
@@ -892,6 +977,16 @@ async def balance(interaction: discord.Interaction):
 
 @bot.tree.command(name="daily", description="Claim daily tokens (24h cooldown)")
 async def daily(interaction: discord.Interaction):
+    # Check if user has linked Roblox account
+    if not has_linked_roblox(interaction.user.id):
+        embed = discord.Embed(
+            title="🔗 Roblox Account Required",
+            description="You need to link your Roblox account before using the bot!\n\nUse `/roblox <username>` to link your account.",
+            color=0xff9900
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+    
     can_use, next_use = can_use_command(interaction.user.id, "daily", 24)
     
     if not can_use:
@@ -913,6 +1008,16 @@ async def daily(interaction: discord.Interaction):
 
 @bot.tree.command(name="work", description="Work for tokens (3h cooldown)")
 async def work(interaction: discord.Interaction):
+    # Check if user has linked Roblox account
+    if not has_linked_roblox(interaction.user.id):
+        embed = discord.Embed(
+            title="🔗 Roblox Account Required",
+            description="You need to link your Roblox account before using the bot!\n\nUse `/roblox <username>` to link your account.",
+            color=0xff9900
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+    
     can_use, next_use = can_use_command(interaction.user.id, "work", 3)
     
     if not can_use:
@@ -936,6 +1041,16 @@ async def work(interaction: discord.Interaction):
 
 @bot.tree.command(name="crime", description="Commit crime for tokens (1h cooldown, risky!)")
 async def crime(interaction: discord.Interaction):
+    # Check if user has linked Roblox account
+    if not has_linked_roblox(interaction.user.id):
+        embed = discord.Embed(
+            title="🔗 Roblox Account Required",
+            description="You need to link your Roblox account before using the bot!\n\nUse `/roblox <username>` to link your account.",
+            color=0xff9900
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+    
     can_use, next_use = can_use_command(interaction.user.id, "crime", 1)
     
     if not can_use:
@@ -973,6 +1088,16 @@ async def crime(interaction: discord.Interaction):
 
 @bot.tree.command(name="coinflip", description="Bet tokens on a coinflip")
 async def coinflip(interaction: discord.Interaction, amount: str, choice: str):
+    # Check if user has linked Roblox account
+    if not has_linked_roblox(interaction.user.id):
+        embed = discord.Embed(
+            title="🔗 Roblox Account Required",
+            description="You need to link your Roblox account before using the bot!\n\nUse `/roblox <username>` to link your account.",
+            color=0xff9900
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+    
     if not can_use_short_cooldown(interaction.user.id, "coinflip", 5):
         await interaction.response.send_message("⏰ Please wait 5 seconds between coinflips!", ephemeral=True)
         return
@@ -1139,6 +1264,16 @@ class DuelAcceptView(discord.ui.View):
 
 @bot.tree.command(name="duel", description="Challenge another user to a coinflip duel")
 async def duel(interaction: discord.Interaction, user: discord.Member, amount: str):
+    # Check if user has linked Roblox account
+    if not has_linked_roblox(interaction.user.id):
+        embed = discord.Embed(
+            title="🔗 Roblox Account Required",
+            description="You need to link your Roblox account before using the bot!\n\nUse `/roblox <username>` to link your account.",
+            color=0xff9900
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+    
     if not can_use_short_cooldown(interaction.user.id, "duel", 10):
         await interaction.response.send_message("⏰ Please wait 10 seconds between duel challenges!", ephemeral=True)
         return
@@ -1206,6 +1341,16 @@ async def duel(interaction: discord.Interaction, user: discord.Member, amount: s
 
 @bot.tree.command(name="gift", description="Gift tokens to another user (max 3k per day)")
 async def gift(interaction: discord.Interaction, user: discord.Member, amount: str):
+    # Check if user has linked Roblox account
+    if not has_linked_roblox(interaction.user.id):
+        embed = discord.Embed(
+            title="🔗 Roblox Account Required",
+            description="You need to link your Roblox account before using the bot!\n\nUse `/roblox <username>` to link your account.",
+            color=0xff9900
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+    
     if not can_use_short_cooldown(interaction.user.id, "gift", 3):
         await interaction.response.send_message("⏰ Please wait 3 seconds between gifts!", ephemeral=True)
         return
@@ -1366,13 +1511,23 @@ class ShopView(discord.ui.View):
         if item.get('description'):
             embed.add_field(name="Description", value=item['description'], inline=False)
         
-        embed.set_footer(text="Are you sure you want to buy this item?")
+        embed.set_footer text="Are you sure you want to buy this item?")
         
         view = PurchaseConfirmView(item, interaction.user.id)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 @bot.tree.command(name="shop", description="Browse the token shop")
 async def shop(interaction: discord.Interaction):
+    # Check if user has linked Roblox account
+    if not has_linked_roblox(interaction.user.id):
+        embed = discord.Embed(
+            title="🔗 Roblox Account Required",
+            description="You need to link your Roblox account before using the bot!\n\nUse `/roblox <username>` to link your account.",
+            color=0xff9900
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+    
     balance = get_user_balance(interaction.user.id)
     
     embed = discord.Embed(title="🛒 Token Shop", color=0x0099ff)
@@ -1399,6 +1554,16 @@ async def shop(interaction: discord.Interaction):
 
 @bot.tree.command(name="buy", description="Buy an item from the shop")
 async def buy(interaction: discord.Interaction, item_name: str, quantity: int = 1):
+    # Check if user has linked Roblox account
+    if not has_linked_roblox(interaction.user.id):
+        embed = discord.Embed(
+            title="🔗 Roblox Account Required",
+            description="You need to link your Roblox account before using the bot!\n\nUse `/roblox <username>` to link your account.",
+            color=0xff9900
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+    
     # Check 3 second cooldown
     if not can_use_short_cooldown(interaction.user.id, "buy", 3):
         await interaction.response.send_message("⏰ Please wait 3 seconds between purchases!", ephemeral=True)
@@ -1685,7 +1850,7 @@ async def addshop(interaction: discord.Interaction):
         inline=False
     )
     
-    embed.set_footer(text="Use the buttons below to manage the shop")
+    embed.set_footer text="Use the buttons below to manage the shop")
     
     view = ShopManageView()
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
@@ -1704,7 +1869,7 @@ class ResetConfirmView(discord.ui.View):
         # Reset all data
         global user_data, cooldowns, invite_data, user_message_times, roblox_data
         user_data.clear()
-        cooldowns = {"daily": {}, "work": {}, "crime": {}, "gift": {}, "buy": {}, "coinflip": {}, "duel": {}, "giveaway": {}, "mines": {}, "roblox": {}}
+        cooldowns = {"daily": {}, "work": {}, "crime": {}, "gift": {}, "buy": {}, "coinflip": {}, "duel": {}, "giveaway": {}, "mines": {}, "roblox": {}, "doors": {}}
         invite_data.clear()
         user_message_times.clear()
         roblox_data.clear()
@@ -1774,6 +1939,16 @@ async def resetdata(interaction: discord.Interaction, confirmation_code: str):
 
 @bot.tree.command(name="leaderboard", description="View the top token holders")
 async def leaderboard(interaction: discord.Interaction, page: int = 1):
+    # Check if user has linked Roblox account
+    if not has_linked_roblox(interaction.user.id):
+        embed = discord.Embed(
+            title="🔗 Roblox Account Required",
+            description="You need to link your Roblox account before using the bot!\n\nUse `/roblox <username>` to link your account.",
+            color=0xff9900
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+    
     if not user_data:
         embed = discord.Embed(
             title="📊 Token Leaderboard",
@@ -1961,13 +2136,17 @@ class MinesButton(discord.ui.Button):
         self.revealed = revealed
         self.is_mine = is_mine
         
+        # Calculate row (0-4) and column (0-4)
+        row = position // 5
+        col = position % 5
+        
         if revealed:
             if is_mine:
-                super().__init__(style=discord.ButtonStyle.danger, label="💣", disabled=True, row=position // 5)
+                super().__init__(style=discord.ButtonStyle.danger, label="💣", disabled=True, row=row)
             else:
-                super().__init__(style=discord.ButtonStyle.success, label="💎", disabled=True, row=position // 5)
+                super().__init__(style=discord.ButtonStyle.success, label="💎", disabled=True, row=row)
         else:
-            super().__init__(style=discord.ButtonStyle.secondary, label="⬜", row=position // 5)
+            super().__init__(style=discord.ButtonStyle.secondary, label="⬜", row=row)
     
     async def callback(self, interaction: discord.Interaction):
         # Get the game data
@@ -2123,6 +2302,16 @@ class MinesView(discord.ui.View):
 
 @bot.tree.command(name="mines", description="Play mines game - find gems to multiply your bet!")
 async def mines(interaction: discord.Interaction, amount: str, mines_count: int):
+    # Check if user has linked Roblox account
+    if not has_linked_roblox(interaction.user.id):
+        embed = discord.Embed(
+            title="🔗 Roblox Account Required",
+            description="You need to link your Roblox account before using the bot!\n\nUse `/roblox <username>` to link your account.",
+            color=0xff9900
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+    
     # Check cooldown
     if not can_use_short_cooldown(interaction.user.id, "mines", 10):
         await interaction.response.send_message("⏰ Please wait 10 seconds between mines games!", ephemeral=True)
@@ -2453,14 +2642,19 @@ async def config_cf(interaction: discord.Interaction):
 
 # Invite Panel View
 class InvitePanelView(discord.ui.View):
-    def __init__(self, user_id):
-        super().__init__(timeout=300)
-        self.user_id = user_id
+    def __init__(self):
+        super().__init__(timeout=None)  # No timeout for persistent panels
     
     @discord.ui.button(label="🔗 Generate Invite Link", style=discord.ButtonStyle.green, emoji="🔗")
     async def generate_invite(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("❌ This is not your panel!", ephemeral=True)
+        # Check if user has linked Roblox account
+        if not has_linked_roblox(interaction.user.id):
+            embed = discord.Embed(
+                title="🔗 Roblox Account Required",
+                description="You need to link your Roblox account before using the bot!\n\nUse `/roblox <username>` to link your account.",
+                color=0xff9900
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
             return
         
         try:
@@ -2495,8 +2689,14 @@ class InvitePanelView(discord.ui.View):
     
     @discord.ui.button(label="📊 View My Invites", style=discord.ButtonStyle.blurple, emoji="📊")
     async def view_invites(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("❌ This is not your panel!", ephemeral=True)
+        # Check if user has linked Roblox account
+        if not has_linked_roblox(interaction.user.id):
+            embed = discord.Embed(
+                title="🔗 Roblox Account Required",
+                description="You need to link your Roblox account before using the bot!\n\nUse `/roblox <username>` to link your account.",
+                color=0xff9900
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
             return
         
         user_id_str = str(interaction.user.id)
@@ -2539,10 +2739,10 @@ class InvitePanelView(discord.ui.View):
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@bot.tree.command(name="invitespanel", description="View invite rewards information and manage your invites (Admin only)")
+@bot.tree.command(name="invitespanel", description="Display invite rewards panel in a channel (Admin only)")
 @discord.app_commands.check(admin_check)
-async def invitespanel(interaction: discord.Interaction):
-    """Display the invite rewards panel (Admin only)"""
+async def invitespanel(interaction: discord.Interaction, channel: discord.TextChannel):
+    """Display the invite rewards panel in a specific channel (Admin only)"""
     embed = discord.Embed(
         title="🎉 Invite Rewards System",
         description="Earn tokens by inviting friends to the server!",
@@ -2568,23 +2768,219 @@ async def invitespanel(interaction: discord.Interaction):
         inline=False
     )
     
-    user_id_str = str(interaction.user.id)
-    user_invites = invite_data.get(user_id_str, {
-        'invited_users': [],
-        'total_invites': 0,
-        'tokens_earned': 0
-    })
+    embed.set_footer(text="Use the buttons below to manage your invites")
+    
+    view = InvitePanelView()
+    
+    try:
+        await channel.send(embed=embed, view=view)
+        await interaction.response.send_message(f"✅ Invite panel sent to {channel.mention}", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Error sending panel to {channel.mention}: {e}", ephemeral=True)
+
+# ===== DOORS GAME =====
+
+# Doors game button class
+class DoorButton(discord.ui.Button):
+    def __init__(self, door_number):
+        super().__init__(style=discord.ButtonStyle.secondary, label="🚪", row=door_number-1)
+        self.door_number = door_number
+    
+    async def callback(self, interaction: discord.Interaction):
+        # Check if user has linked Roblox account
+        if not has_linked_roblox(interaction.user.id):
+            embed = discord.Embed(
+                title="🔗 Roblox Account Required",
+                description="You need to link your Roblox account before using the bot!\n\nUse `/roblox <username>` to link your account.",
+                color=0xff9900
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        # Check cooldown
+        if not can_use_short_cooldown(interaction.user.id, "doors", 3):
+            await interaction.response.send_message("⏰ Please wait 3 seconds between door games!", ephemeral=True)
+            return
+        
+        # Check balance
+        fee = 550
+        balance = get_user_balance(interaction.user.id)
+        if balance < fee:
+            await interaction.response.send_message(f"❌ You need **{fee - balance:,}** more tokens to play!", ephemeral=True)
+            return
+        
+        # Deduct fee
+        update_balance(interaction.user.id, -fee)
+        set_short_cooldown(interaction.user.id, "doors")
+        await save_data()
+        
+        # Determine prize
+        roll = random.random() * 100
+        
+        if roll <= 0.3:  # 0.3% chance
+            prize_type = "TITANIC"
+            token_prize = 0
+            gem_prize = 0
+            titanic_prize = 1
+        elif roll <= 1.3:  # 1% chance
+            prize_type = "1,000,000,000 Gems"
+            token_prize = 0
+            gem_prize = 1000000000
+            titanic_prize = 0
+        elif roll <= 2.8:  # 1.5% chance
+            prize_type = "300,000,000 Gems"
+            token_prize = 0
+            gem_prize = 300000000
+            titanic_prize = 0
+        elif roll <= 22.8:  # 20% chance
+            prize_type = "50,000,000 Gems"
+            token_prize = 0
+            gem_prize = 50000000
+            titanic_prize = 0
+        elif roll <= 52.8:  # 30% chance
+            prize_type = "10,000,000 Gems"
+            token_prize = 0
+            gem_prize = 10000000
+            titanic_prize = 0
+        else:  # 60% chance
+            prize_type = "450 Tokens"
+            token_prize = 450
+            gem_prize = 0
+            titanic_prize = 0
+        
+        # Award token prize if any
+        if token_prize > 0:
+            update_balance(interaction.user.id, token_prize)
+            await save_data()
+        
+        # Create result embed
+        embed = discord.Embed(
+            title="🚪 Doors Game Result",
+            color=0xFFD700,
+            timestamp=datetime.now()
+        )
+        
+        embed.add_field(name="Door Chosen", value=f"🚪 Door {self.door_number}", inline=True)
+        embed.add_field(name="Entry Fee", value=f"550 🪙", inline=True)
+        embed.add_field(name="Prize Won", value=prize_type, inline=True)
+        
+        if token_prize > 0:
+            embed.add_field(name="Token Prize", value=f"{token_prize:,} 🪙", inline=True)
+            embed.add_field(name="Net Gain/Loss", value=f"{token_prize - fee:,} 🪙", inline=True)
+        
+        embed.add_field(name="New Balance", value=f"{get_user_balance(interaction.user.id):,} 🪙", inline=True)
+        
+        embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
+        
+        # Log the doors game
+        await log_action(
+            "DOORS_GAME",
+            "🚪 Doors Game Played",
+            f"**{interaction.user.mention}** played doors game and won **{prize_type}**",
+            color=0xFFD700,
+            user=interaction.user,
+            fields=[
+                {"name": "Door Chosen", "value": f"Door {self.door_number}", "inline": True},
+                {"name": "Entry Fee", "value": "550 🪙", "inline": True},
+                {"name": "Prize Won", "value": prize_type, "inline": True},
+                {"name": "Token Prize", "value": f"{token_prize:,} 🪙" if token_prize > 0 else "0 🪙", "inline": True}
+            ]
+        )
+        
+        # Log gem/titanic prizes to purchase log
+        if gem_prize > 0:
+            await log_purchase(interaction.user, f"Doors Game - {prize_type}", 0, 1, "reward")
+        elif titanic_prize > 0:
+            await log_purchase(interaction.user, "Doors Game - TITANIC", 0, 1, "reward")
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# Doors panel view
+class DoorsPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)  # No timeout for persistent panels
+        
+        # Add 5 door buttons
+        for i in range(1, 6):
+            self.add_item(DoorButton(i))
+    
+    @discord.ui.button(label="💰 Check Balance", style=discord.ButtonStyle.green, row=4)
+    async def check_balance(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Check if user has linked Roblox account
+        if not has_linked_roblox(interaction.user.id):
+            embed = discord.Embed(
+                title="🔗 Roblox Account Required",
+                description="You need to link your Roblox account before using the bot!\n\nUse `/roblox <username>` to link your account.",
+                color=0xff9900
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        balance = get_user_balance(interaction.user.id)
+        fee = 550
+        
+        embed = discord.Embed(
+            title="💰 Your Token Balance",
+            color=0x0099ff,
+            timestamp=datetime.now()
+        )
+        
+        embed.add_field(name="Current Balance", value=f"{balance:,} 🪙", inline=True)
+        embed.add_field(name="Door Game Fee", value=f"550 🪙", inline=True)
+        embed.add_field(name="Can Play?", value="✅ Yes" if balance >= fee else "❌ No", inline=True)
+        
+        if balance < fee:
+            embed.add_field(name="Need", value=f"{fee - balance:,} more 🪙", inline=True)
+        
+        embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="doorspanel", description="Display doors game panel in a channel (Admin only)")
+@discord.app_commands.check(admin_check)
+async def doorspanel(interaction: discord.Interaction, channel: discord.TextChannel):
+    """Display the doors game panel in a specific channel (Admin only)"""
+    embed = discord.Embed(
+        title="🚪 Doors Game",
+        description="Choose a door for a chance to win amazing prizes!",
+        color=0xFFD700,
+        timestamp=datetime.now()
+    )
     
     embed.add_field(
-        name="📊 Your Stats",
-        value=f"**Total Invites:** {user_invites['total_invites']}\n**Tokens Earned:** {user_invites['tokens_earned']:,} 🪙",
+        name="🎯 How to Play",
+        value="• Click any of the 5 doors below\n• Pay **550 🪙** entry fee\n• Win amazing prizes based on luck!",
         inline=False
     )
     
-    embed.set_footer(text="Use the buttons below to manage your invites")
+    embed.add_field(
+        name="🏆 Prize Distribution",
+        value=(
+            "• **60% chance**: 450 🪙\n"
+            "• **30% chance**: 10,000,000 💎\n"
+            "• **20% chance**: 50,000,000 💎\n"
+            "• **1.5% chance**: 300,000,000 💎\n"
+            "• **1% chance**: 1,000,000,000 💎\n"
+            "• **0.3% chance**: TITANIC 🏆"
+        ),
+        inline=False
+    )
     
-    view = InvitePanelView(interaction.user.id)
-    await interaction.response.send_message(embed=embed, view=view)
+    embed.add_field(
+        name="💰 Token Prizes",
+        value="Token prizes are automatically added to your balance. Gem and Titanic prizes are logged separately.",
+        inline=False
+    )
+    
+    embed.set_footer(text="Good luck! May the odds be ever in your favor!")
+    
+    view = DoorsPanelView()
+    
+    try:
+        await channel.send(embed=embed, view=view)
+        await interaction.response.send_message(f"✅ Doors panel sent to {channel.mention}", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Error sending panel to {channel.mention}: {e}", ephemeral=True)
 
 # ===== GIVEAWAY SYSTEM =====
 
@@ -2596,6 +2992,16 @@ class GiveawayEnterView(discord.ui.View):
     
     @discord.ui.button(label="🎉 Enter Giveaway", style=discord.ButtonStyle.green, emoji="🎉")
     async def enter_giveaway(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Check if user has linked Roblox account
+        if not has_linked_roblox(interaction.user.id):
+            embed = discord.Embed(
+                title="🔗 Roblox Account Required",
+                description="You need to link your Roblox account before using the bot!\n\nUse `/roblox <username>` to link your account.",
+                color=0xff9900
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
         if self.giveaway_id not in active_giveaways:
             await interaction.response.send_message("❌ This giveaway has ended!", ephemeral=True)
             return
@@ -2638,6 +3044,16 @@ class GiveawayEnterView(discord.ui.View):
 
 @bot.tree.command(name="giveaway", description="Start a token giveaway (25 seconds)")
 async def giveaway(interaction: discord.Interaction, amount: str, winners: int):
+    # Check if user has linked Roblox account
+    if not has_linked_roblox(interaction.user.id):
+        embed = discord.Embed(
+            title="🔗 Roblox Account Required",
+            description="You need to link your Roblox account before using the bot!\n\nUse `/roblox <username>` to link your account.",
+            color=0xff9900
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+    
     # Check cooldown - 30 seconds for giveaways
     if not can_use_short_cooldown(interaction.user.id, "giveaway", 30):
         await interaction.response.send_message("⏰ Please wait 30 seconds before starting another giveaway!", ephemeral=True)
@@ -2728,7 +3144,7 @@ async def giveaway(interaction: discord.Interaction, amount: str, winners: int):
     embed.set_footer(text="Click the button below to enter! • Ends in 25 seconds")
     
     view = GiveawayEnterView(giveaway_id)
-    await interaction.response.send_message(embed=embed, view=view)
+    message = await interaction.response.send_message(embed=embed, view=view)
     
     # Update the giveaway message every 5 seconds with progress
     async def update_giveaway_message():
@@ -2901,6 +3317,16 @@ async def giveaway(interaction: discord.Interaction, amount: str, winners: int):
 
 @bot.tree.command(name="giveawayinfo", description="Check your daily giveaway limits")
 async def giveawayinfo(interaction: discord.Interaction):
+    # Check if user has linked Roblox account
+    if not has_linked_roblox(interaction.user.id):
+        embed = discord.Embed(
+            title="🔗 Roblox Account Required",
+            description="You need to link your Roblox account before using the bot!\n\nUse `/roblox <username>` to link your account.",
+            color=0xff9900
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+    
     user_id = str(interaction.user.id)
     today = datetime.now().date().isoformat()
     
@@ -2978,7 +3404,8 @@ async def about(ctx):
             "`/giveaway <amount> <winners>` - Start a token giveaway\n"
             "`/giveawayinfo` - Check your daily limits\n"
             "`/mines <amount> <mines>` - Play mines game (find gems to multiply your bet!)\n"
-            "`/invitespanel` - View invite rewards and manage invites"
+            "`/roblox <username>` - Link your Roblox account (REQUIRED)\n"
+            "`!about` - Show this help message"
         ),
         inline=False
     )
@@ -3016,7 +3443,9 @@ async def about(ctx):
                 "`/config_cf` - Configure coinflip settings\n"
                 "`/config_mines` - Configure mines settings\n"
                 "`/getroblox <user>` - Get Roblox username\n"
-                "`/setroblox <user> <username>` - Set Roblox username"
+                "`/setroblox <user> <username>` - Set Roblox username\n"
+                "`/invitespanel <channel>` - Send invite panel to channel\n"
+                "`/doorspanel <channel>` - Send doors game panel to channel"
             ),
             inline=False
         )
