@@ -1511,7 +1511,7 @@ class ShopView(discord.ui.View):
         if item.get('description'):
             embed.add_field(name="Description", value=item['description'], inline=False)
         
-        embed.set_footer text="Are you sure you want to buy this item?")
+        embed.set_footer text=("Are you sure you want to buy this item?")
         
         view = PurchaseConfirmView(item, interaction.user.id)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
