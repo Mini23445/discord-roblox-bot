@@ -2171,10 +2171,11 @@ class MinesView(discord.ui.View):
         super().__init__(timeout=300)
         self.game_id = game_id
         
+        # Add the 25 mine buttons (positions 0-24, rows 0-4)
         for i in range(25):
             self.add_item(MinesButton(i))
     
-    @discord.ui.button(label="💰 Cash Out", style=discord.ButtonStyle.green, row=5)
+ @discord.ui.button(label="💰 Cash Out", style=discord.ButtonStyle.green, row=4)
     async def cash_out(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.game_id not in active_mines_games:
             await interaction.response.send_message("❌ This game has expired!", ephemeral=True)
