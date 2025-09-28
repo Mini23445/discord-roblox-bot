@@ -23,7 +23,7 @@ intents.invites = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Configuration
+Configuration
 ADMIN_ROLE_ID = 1405525451807522847
 LOG_CHANNEL_ID = 1405523454924685353
 PURCHASE_LOG_CHANNEL_ID = 1421801345765081098
@@ -753,19 +753,7 @@ async def on_message(message):
     global minigame_message_count
     
     if not message.author.bot and message.guild:
-        if not has_linked_roblox(message.author.id):
-            if not message.content.startswith('!about') and not message.content.startswith('/roblox'):
-                try:
-                    embed = discord.Embed(
-                        title="🔗 Roblox Account Required",
-                        description="You need to link your Roblox account before using the bot!\n\nUse `/roblox <username>` to link your account.",
-                        color=0xff9900
-                    )
-                    await message.channel.send(embed=embed, delete_after=10)
-                except:
-                    pass
-                return
-        
+        # Check for spam
         is_spam, old_balance, new_balance = check_spam(message.author.id)
         if is_spam:
             try:
@@ -783,17 +771,21 @@ async def on_message(message):
             except:
                 pass
         
+        # Award tokens for normal messages (if not spamming)
         tokens = random.randint(1, 5)
         update_balance(message.author.id, tokens)
         
+        # Check if message is in minigame channel
         if message.channel.id == MINIGAME_CHANNEL_ID:
             minigame_message_count += 1
             
-            if random.random() <= 0.05:
-                huge_reward = random.randint(500, 2000)
+            # 5% chance to win huge reward when chatting in minigame channel
+            if random.random() <= 0.05:  # 5% chance
+                huge_reward = random.randint(500, 2000)  # 500-2000 tokens
                 new_balance = update_balance(message.author.id, huge_reward)
                 await save_data()
                 
+                # Log the reward
                 await log_purchase(message.author, "Huge Chat Reward", huge_reward, 1, "reward")
                 
                 embed = discord.Embed(
@@ -807,6 +799,7 @@ async def on_message(message):
                 
                 await message.channel.send(embed=embed)
         
+        # Check minigame answer (only in minigame channel)
         if (active_minigame and 
             active_minigame["active"] and 
             active_minigame["winner"] is None and
@@ -817,6 +810,7 @@ async def on_message(message):
                 active_minigame["winner"] = message.author.id
                 active_minigame["active"] = False
                 
+                # Award tokens
                 update_balance(message.author.id, 200)
                 await save_data()
                 
@@ -2078,6 +2072,7 @@ async def removetoken(interaction: discord.Interaction, user: discord.Member, am
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
+
 # ===== MINES GAME =====
 
 # ===== MINES GAME =====
@@ -2141,6 +2136,15 @@ class MinesButton(discord.ui.Button):
             
             await interaction.response.edit_message(embed=embed, view=self.view)
             
+            # Send cash out message for game over
+            cash_out_view = MinesCashOutView(game_id)
+            cash_out_embed = discord.Embed(
+                title="💎 Mines Game - Game Over",
+                description="The game has ended. You can collect your results below.",
+                color=0xff4444
+            )
+            await interaction.followup.send(embed=cash_out_embed, view=cash_out_view, ephemeral=True)
+            
             del active_mines_games[game_id]
             return
         
@@ -2164,9 +2168,165 @@ class MinesButton(discord.ui.Button):
         embed.add_field(name="Potential Win", value=f"{potential_win:,} 🪙", inline=True)
         embed.add_field(name="Mines Remaining", value=f"{game['mines_count']} / 25", inline=True)
         embed.add_field(name="‎", value="‎", inline=True)
-        embed.set_footer(text="Click 'Cash Out' to collect your winnings!")
+        embed.set_footer(text="Use the cash out button below to collect your winnings!")
         
         await interaction.response.edit_message(embed=embed, view=self.view)
+        
+        # Send cash out button in a separate message
+        cash_out_view = MinesCashOutView(game_id)
+        cash_out_embed = discord.Embed(
+            title="💰 Cash Out",
+            description=f"Current multiplier: **{current_multiplier:.2f}x**\nPotential winnings: **{potential_win:,} 🪙**",
+            color=0xFFD700
+        )
+        await interaction.followup.send(embed=cash_out_embed, view=cash_out_view, ephemeral=True)
+
+class MinesView(discord.ui.View):
+    def __init__(self, game_id):
+        super().__init__(timeout=300)
+        self.game_id = game_id
+        
+        # Create the 5x5 grid (25 buttons in rows 0-4)
+        for i in range(25):
+            self.add_item(MinesButton(i))
+
+class MinesCashOutView(discord.ui.View):
+    def __init__(self, game_id):
+        super().__init__(timeout=300)
+        self.game_id = game_id
+    
+    @discord.ui.button(label="💰 Cash Out", style=discord.ButtonStyle.green)
+    async def cash_out(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.game_id not in active_mines_games:
+            await interaction.response.send_message("❌ This game has expired!", ephemeral=True)
+            return
+        
+        game = active_mines_games[self.game_id]
+        
+        multiplier = MINES_MULTIPLIERS.get(len(game['revealed']), 1.0)
+        winnings = int(game['bet'] * multiplier)
+        
+        update_balance(interaction.user.id, winnings)
+        await save_data()
+        
+        # Update the main game view to show all mines
+        main_message = await interaction.channel.fetch_message(interaction.message.reference.message_id)
+        main_view = discord.ui.View()
+        
+        for i in range(25):
+            if i in game['mines']:
+                main_view.add_item(MinesButton(i, revealed=True, is_mine=True))
+            elif i in game['revealed']:
+                main_view.add_item(MinesButton(i, revealed=True, is_mine=False))
+            else:
+                main_view.add_item(MinesButton(i, revealed=False, is_mine=False))
+        
+        embed = discord.Embed(
+            title="💰 Mines Game - CASH OUT!",
+            description=f"You cashed out and won **{winnings:,}** 🪙!",
+            color=0x00ff00
+        )
+        embed.add_field(name="Bet Amount", value=f"{game['bet']:,} 🪙", inline=True)
+        embed.add_field(name="Safe Spots Found", value=f"{len(game['revealed'])}", inline=True)
+        embed.add_field(name="Multiplier", value=f"{multiplier:.2f}x", inline=True)
+        embed.add_field(name="Winnings", value=f"{winnings:,} 🪙", inline=True)
+        embed.add_field(name="Mines", value=f"{game['mines_count']} / 25", inline=True)
+        embed.add_field(name="‎", value="‎", inline=True)
+        embed.set_footer(text="Congratulations!")
+        
+        await main_message.edit(embed=embed, view=main_view)
+        
+        # Disable the cash out button
+        button.disabled = True
+        button.label = "✅ Cashed Out"
+        await interaction.response.edit_message(view=self)
+        
+        del active_mines_games[self.game_id]
+        
+        await log_action(
+            "MINES",
+            "💰 Mines Game Won",
+            f"**{interaction.user.mention}** won **{winnings:,} tokens** in mines game",
+            color=0x00ff00,
+            user=interaction.user,
+            fields=[
+                {"name": "Bet Amount", "value": f"{game['bet']:,} 🪙", "inline": True},
+                {"name": "Safe Spots", "value": len(game['revealed']), "inline": True},
+                {"name": "Multiplier", "value": f"{multiplier:.2f}x", "inline": True},
+                {"name": "Winnings", "value": f"{winnings:,} 🪙", "inline": True}
+            ]
+        )
+
+@bot.tree.command(name="mines", description="Play mines game - find gems to multiply your bet!")
+async def mines(interaction: discord.Interaction, amount: str, mines_count: int):
+    if not has_linked_roblox(interaction.user.id):
+        embed = discord.Embed(
+            title="🔗 Roblox Account Required",
+            description="You need to link your Roblox account before using the bot!\n\nUse `/roblox <username>` to link your account.",
+            color=0xff9900
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+    
+    if not can_use_short_cooldown(interaction.user.id, "mines", 10):
+        await interaction.response.send_message("⏰ Please wait 10 seconds between mines games!", ephemeral=True)
+        return
+    
+    parsed_amount = parse_amount(amount)
+    if parsed_amount is None or parsed_amount <= 0:
+        await interaction.response.send_message("❌ Invalid amount! Use numbers or suffixes like 10k, 1m, 1b", ephemeral=True)
+        return
+    
+    if parsed_amount < mines_config["min_bet"]:
+        await interaction.response.send_message(f"❌ Minimum bet is {mines_config['min_bet']:,} tokens!", ephemeral=True)
+        return
+    
+    if parsed_amount > mines_config["max_bet"]:
+        await interaction.response.send_message(f"❌ Maximum bet is {mines_config['max_bet']:,} tokens!", ephemeral=True)
+        return
+    
+    if mines_count < mines_config["min_mines"] or mines_count > mines_config["max_mines"]:
+        await interaction.response.send_message(f"❌ Number of mines must be between {mines_config['min_mines']} and {mines_config['max_mines']}!", ephemeral=True)
+        return
+    
+    balance = get_user_balance(interaction.user.id)
+    if balance < parsed_amount:
+        await interaction.response.send_message(f"❌ You need **{parsed_amount - balance:,}** more tokens to play!", ephemeral=True)
+        return
+    
+    update_balance(interaction.user.id, -parsed_amount)
+    set_short_cooldown(interaction.user.id, "mines")
+    await save_data()
+    
+    game_id = f"{interaction.user.id}_mines"
+    
+    all_positions = list(range(25))
+    mines_positions = random.sample(all_positions, mines_count)
+    
+    active_mines_games[game_id] = {
+        'bet': parsed_amount,
+        'mines': mines_positions,
+        'mines_count': mines_count,
+        'revealed': [],
+        'created_at': datetime.now().isoformat(),
+        'game_over': False
+    }
+    
+    embed = discord.Embed(
+        title="💎 Mines Game",
+        description=f"Click on squares to reveal gems. Avoid the mines!",
+        color=0x00ff00
+    )
+    embed.add_field(name="Bet Amount", value=f"{parsed_amount:,} 🪙", inline=True)
+    embed.add_field(name="Safe Spots Found", value="0", inline=True)
+    embed.add_field(name="Current Multiplier", value="1.00x", inline=True)
+    embed.add_field(name="Potential Win", value=f"{parsed_amount:,} 🪙", inline=True)
+    embed.add_field(name="Mines", value=f"{mines_count} / 25", inline=True)
+    embed.add_field(name="‎", value="‎", inline=True)
+    embed.set_footer(text="Click on squares to reveal gems!")
+    
+    view = MinesView(game_id)
+    await interaction.response.send_message(embed=embed, view=view)
 
 class MinesView(discord.ui.View):
     def __init__(self, game_id):
