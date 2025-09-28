@@ -23,7 +23,7 @@ intents.invites = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-Configuration
+# Configuration
 ADMIN_ROLE_ID = 1405525451807522847
 LOG_CHANNEL_ID = 1405523454924685353
 PURCHASE_LOG_CHANNEL_ID = 1421801345765081098
