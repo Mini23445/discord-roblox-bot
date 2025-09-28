@@ -1850,7 +1850,7 @@ async def addshop(interaction: discord.Interaction):
         inline=False
     )
     
-    embed.set_footer text="Use the buttons below to manage the shop")
+    embed.set_footer text=("Use the buttons below to manage the shop")
     
     view = ShopManageView()
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
